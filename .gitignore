@@ -1,0 +1,9 @@
+.venv/
+.repo.git/
+__pycache__/
+orders/
+*.log
+*.tmp
+download_report*.csv
+failed*.csv
+*.pyc
