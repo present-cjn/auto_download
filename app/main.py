@@ -122,6 +122,8 @@ def batch_detail(request: Request, batch_id: int):
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
     orders = db.get_batch_orders(batch_id)
+    single_item_orders = [order for order in orders if len(order["items"]) == 1]
+    multi_item_orders = [order for order in orders if len(order["items"]) > 1]
     status_counts = db.get_batch_status_counts(batch_id)
     progress_percent = 0
     if int(batch["link_count"]) > 0:
@@ -133,7 +135,8 @@ def batch_detail(request: Request, batch_id: int):
         {
             "request": request,
             "batch": batch,
-            "orders": orders,
+            "single_item_orders": single_item_orders,
+            "multi_item_orders": multi_item_orders,
             "status_counts": status_counts,
             "progress_percent": progress_percent,
         },

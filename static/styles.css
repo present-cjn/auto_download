@@ -358,6 +358,26 @@ input[type="password"] {
   gap: 12px;
 }
 
+.review-section {
+  margin-bottom: 20px;
+}
+
+.section-heading {
+  align-items: baseline;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin: 0 0 10px;
+}
+
+.section-heading h2 {
+  margin: 0;
+}
+
+.section-heading p {
+  font-size: 14px;
+}
+
 .order-block {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -393,6 +413,11 @@ input[type="password"] {
 
 .sku-cell {
   font-weight: 700;
+}
+
+.order-cell {
+  font-weight: 700;
+  min-width: 150px;
 }
 
 .link-action {

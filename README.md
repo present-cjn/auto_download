@@ -40,6 +40,14 @@ Web 工具支持：
 - 打开原始 Google Drive 链接，便于人工预览或手动下载。
 - 下载批次 ZIP。
 
+云端部署时的下载链路是：
+
+```text
+Google Drive -> 服务器后台任务 -> 服务器保存图片 -> 服务器生成 ZIP -> 用户下载 ZIP 到本地
+```
+
+也就是说，点击“开始/继续下载”后，图片先下载到服务器，不依赖用户电脑持续联网或浏览器保持打开。用户最后通过“下载 ZIP”把服务器整理好的结果包下载到本地。
+
 第一版数据保存在：
 
 ```text
@@ -62,7 +70,7 @@ python download_orders.py --dry-run
 
 ## CLI Download
 
-Download images into `orders/<订单号>/`:
+Download images into `orders/<订单号>/<sku>/`:
 
 ```bash
 . .venv/bin/activate
@@ -94,7 +102,7 @@ python download_orders.py --limit 3
 默认输出到：
 
 ```text
-orders/<订单号>/
+orders/<订单号>/<sku>/
 ```
 
 `.venv/`、`orders/`、缓存文件和下载报告文件默认不进入 Git。
