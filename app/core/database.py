@@ -10,7 +10,9 @@ from app.core.excel_parser import OrderItemRow
 DB_PATH = Path("data/app.db")
 
 
-def connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
+def connect(db_path: Optional[Path] = None) -> sqlite3.Connection:
+    if db_path is None:
+        db_path = DB_PATH
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -18,8 +20,19 @@ def connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
     return conn
 
 
-def init_db(db_path: Path = DB_PATH) -> None:
+def init_db(db_path: Optional[Path] = None) -> None:
     with connect(db_path) as conn:
+        existing_columns = [
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(download_items)").fetchall()
+        ]
+        if existing_columns and "sku" not in existing_columns:
+            conn.executescript(
+                """
+                DROP TABLE IF EXISTS downloaded_files;
+                DROP TABLE IF EXISTS download_items;
+                """
+            )
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS import_batches (
@@ -84,6 +97,7 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 order_item_id INTEGER NOT NULL REFERENCES order_items(id) ON DELETE CASCADE,
                 order_no TEXT NOT NULL,
                 row_number INTEGER NOT NULL,
+                sku TEXT,
                 design_link TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',
                 image_count INTEGER NOT NULL DEFAULT 0,
@@ -91,7 +105,7 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 started_at TEXT,
                 completed_at TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(batch_id, order_id, design_link)
+                UNIQUE(batch_id, order_item_id, design_link)
             );
 
             CREATE TABLE IF NOT EXISTS downloaded_files (
@@ -286,9 +300,9 @@ def insert_import_items(batch_id: int, items: list[OrderItemRow]) -> None:
                 conn.execute(
                     """
                     INSERT OR IGNORE INTO download_items (
-                        batch_id, order_id, order_item_id, order_no, row_number, design_link
+                        batch_id, order_id, order_item_id, order_no, row_number, sku, design_link
                     )
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         batch_id,
@@ -296,6 +310,7 @@ def insert_import_items(batch_id: int, items: list[OrderItemRow]) -> None:
                         order_item_id,
                         item.order_no,
                         item.row_number,
+                        item.sku,
                         item.design_link,
                     ),
                 )
@@ -346,8 +361,7 @@ def get_batch_orders(batch_id: int) -> list[dict[str, Any]]:
                 FROM order_items oi
                 LEFT JOIN download_items di
                     ON di.batch_id = oi.batch_id
-                    AND di.order_id = oi.order_id
-                    AND di.design_link = oi.design_link
+                    AND di.order_item_id = oi.id
                 WHERE oi.order_id = ?
                 ORDER BY oi.row_number
                 """,
@@ -361,9 +375,13 @@ def get_pending_download_items(batch_id: int) -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
             """
-            SELECT * FROM download_items
-            WHERE batch_id = ? AND status IN ('pending', 'failed')
-            ORDER BY id
+            SELECT
+                di.*,
+                oi.sku AS item_sku
+            FROM download_items di
+            JOIN order_items oi ON oi.id = di.order_item_id
+            WHERE di.batch_id = ? AND di.status IN ('pending', 'failed')
+            ORDER BY di.id
             """,
             (batch_id,),
         ).fetchall()
@@ -374,9 +392,13 @@ def get_failed_download_items(batch_id: int) -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
             """
-            SELECT * FROM download_items
-            WHERE batch_id = ? AND status = 'failed'
-            ORDER BY id
+            SELECT
+                di.*,
+                oi.sku AS item_sku
+            FROM download_items di
+            JOIN order_items oi ON oi.id = di.order_item_id
+            WHERE di.batch_id = ? AND di.status = 'failed'
+            ORDER BY di.id
             """,
             (batch_id,),
         ).fetchall()

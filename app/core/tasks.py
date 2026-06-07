@@ -6,7 +6,7 @@ import zipfile
 from pathlib import Path
 
 from app.core import database as db
-from app.core.downloader import download_design_images
+from app.core.downloader import download_design_images, safe_filename
 from app.core.excel_parser import DEFAULT_SHEET, parse_order_items
 
 
@@ -62,8 +62,9 @@ def process_download_items(batch_id: int, failed_only: bool = False) -> None:
         db.clear_downloaded_files(download_item_id)
         db.mark_download_started(download_item_id)
         try:
-            order_dir = ORDERS_DIR / str(batch_id) / item["order_no"]
-            copied_files = download_design_images(item["design_link"], order_dir)
+            sku_dir = safe_filename(item["item_sku"] or f"row-{item['row_number']}")
+            target_dir = ORDERS_DIR / str(batch_id) / item["order_no"] / sku_dir
+            copied_files = download_design_images(item["design_link"], target_dir)
             for copied in copied_files:
                 db.add_downloaded_file(
                     download_item_id=download_item_id,

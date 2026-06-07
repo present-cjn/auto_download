@@ -77,6 +77,12 @@ data/orders/<batch_id>/<订单号>/
 data/archives/batch-<batch_id>.zip
 ```
 
+如果同一个订单下有多个 SKU，实际图片目录为：
+
+```text
+data/orders/<batch_id>/<订单号>/<sku>/
+```
+
 后续建议增加：
 
 - `download_report.csv`：订单号、链接、状态、文件数量、错误原因。

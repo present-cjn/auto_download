@@ -43,7 +43,7 @@ Web 工具支持：
 ```text
 data/app.db
 data/uploads/<batch_id>/source.xlsx
-data/orders/<batch_id>/<订单号>/
+data/orders/<batch_id>/<订单号>/<sku>/
 data/archives/batch-<batch_id>.zip
 ```
 
@@ -83,7 +83,7 @@ python download_orders.py --limit 3
 - 订单号列：`订单号`
 - 图片链接列：`Design Link`
 
-同一个订单号如果出现多个不同 `Design Link`，会全部下载到同一个订单目录。
+同一个订单号如果出现多个 SKU，会在订单目录下继续按 SKU 创建子文件夹，并把该 SKU 对应的图片放进去。
 
 数据库里会完整保留每一行 SKU 明细。订单号只在订单层去重，不会丢掉同一订单下的多个 SKU。
 
