@@ -10,6 +10,41 @@ from app.core.excel_parser import OrderItemRow
 DB_PATH = Path("data/app.db")
 
 
+DOWNLOAD_ITEMS_SCHEMA = """
+CREATE TABLE download_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL REFERENCES import_batches(id) ON DELETE CASCADE,
+    order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    order_item_id INTEGER NOT NULL REFERENCES order_items(id) ON DELETE CASCADE,
+    order_no TEXT NOT NULL,
+    row_number INTEGER NOT NULL,
+    sku TEXT,
+    design_link TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    image_count INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(batch_id, order_item_id, design_link)
+);
+"""
+
+DOWNLOADED_FILES_SCHEMA = """
+CREATE TABLE downloaded_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    download_item_id INTEGER NOT NULL REFERENCES download_items(id) ON DELETE CASCADE,
+    batch_id INTEGER NOT NULL REFERENCES import_batches(id) ON DELETE CASCADE,
+    order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    order_no TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    local_path TEXT NOT NULL,
+    file_size INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+
 def connect(db_path: Optional[Path] = None) -> sqlite3.Connection:
     if db_path is None:
         db_path = DB_PATH
@@ -20,21 +55,150 @@ def connect(db_path: Optional[Path] = None) -> sqlite3.Connection:
     return conn
 
 
+def table_columns(conn: sqlite3.Connection, table_name: str) -> list[str]:
+    return [
+        row["name"]
+        for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    ]
+
+
+def migrate_download_items_schema(conn: sqlite3.Connection) -> None:
+    existing_columns = table_columns(conn, "download_items")
+    if not existing_columns or "sku" in existing_columns:
+        return
+
+    conn.execute("PRAGMA foreign_keys = OFF")
+    downloaded_file_columns = table_columns(conn, "downloaded_files")
+    conn.execute("ALTER TABLE download_items RENAME TO download_items_legacy")
+    if downloaded_file_columns:
+        conn.execute("ALTER TABLE downloaded_files RENAME TO downloaded_files_legacy")
+
+    conn.executescript(DOWNLOAD_ITEMS_SCHEMA)
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO download_items (
+            id, batch_id, order_id, order_item_id, order_no, row_number, sku,
+            design_link, status, image_count, error_message, started_at,
+            completed_at, created_at
+        )
+        SELECT
+            di.id,
+            di.batch_id,
+            di.order_id,
+            di.order_item_id,
+            di.order_no,
+            di.row_number,
+            oi.sku,
+            di.design_link,
+            di.status,
+            di.image_count,
+            di.error_message,
+            di.started_at,
+            di.completed_at,
+            di.created_at
+        FROM download_items_legacy di
+        LEFT JOIN order_items oi ON oi.id = di.order_item_id
+        """
+    )
+
+    conn.executescript(DOWNLOADED_FILES_SCHEMA)
+    if downloaded_file_columns:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO downloaded_files (
+                id, download_item_id, batch_id, order_id, order_no,
+                file_name, local_path, file_size, created_at
+            )
+            SELECT
+                id, download_item_id, batch_id, order_id, order_no,
+                file_name, local_path, file_size, created_at
+            FROM downloaded_files_legacy
+            """
+        )
+    conn.execute("PRAGMA foreign_keys = ON")
+
+
+def backfill_missing_download_items(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO download_items (
+            batch_id, order_id, order_item_id, order_no, row_number, sku, design_link
+        )
+        SELECT
+            oi.batch_id,
+            oi.order_id,
+            oi.id,
+            o.order_no,
+            oi.row_number,
+            oi.sku,
+            oi.design_link
+        FROM order_items oi
+        JOIN orders o ON o.id = oi.order_id
+        WHERE oi.design_link IS NOT NULL
+          AND oi.design_link != ''
+        """
+    )
+
+
+def refresh_all_batch_counts(conn: sqlite3.Connection) -> None:
+    rows = conn.execute("SELECT id FROM import_batches").fetchall()
+    for row in rows:
+        batch_id = int(row["id"])
+        order_count = conn.execute(
+            "SELECT COUNT(*) FROM orders WHERE batch_id = ?", (batch_id,)
+        ).fetchone()[0]
+        item_count = conn.execute(
+            "SELECT COUNT(*) FROM order_items WHERE batch_id = ?", (batch_id,)
+        ).fetchone()[0]
+        link_count = conn.execute(
+            "SELECT COUNT(*) FROM download_items WHERE batch_id = ?", (batch_id,)
+        ).fetchone()[0]
+        success_count = conn.execute(
+            """
+            SELECT COUNT(*) FROM download_items
+            WHERE batch_id = ? AND status = 'downloaded'
+            """,
+            (batch_id,),
+        ).fetchone()[0]
+        failed_count = conn.execute(
+            """
+            SELECT COUNT(*) FROM download_items
+            WHERE batch_id = ? AND status = 'failed'
+            """,
+            (batch_id,),
+        ).fetchone()[0]
+        skipped_count = conn.execute(
+            """
+            SELECT COUNT(*) FROM download_items
+            WHERE batch_id = ? AND status = 'skipped'
+            """,
+            (batch_id,),
+        ).fetchone()[0]
+        conn.execute(
+            """
+            UPDATE import_batches
+            SET order_count = ?, item_count = ?, link_count = ?,
+                success_count = ?, failed_count = ?, skipped_count = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                order_count,
+                item_count,
+                link_count,
+                success_count,
+                failed_count,
+                skipped_count,
+                batch_id,
+            ),
+        )
+
+
 def init_db(db_path: Optional[Path] = None) -> None:
     with connect(db_path) as conn:
-        existing_columns = [
-            row["name"]
-            for row in conn.execute("PRAGMA table_info(download_items)").fetchall()
-        ]
-        if existing_columns and "sku" not in existing_columns:
-            conn.executescript(
-                """
-                DROP TABLE IF EXISTS downloaded_files;
-                DROP TABLE IF EXISTS download_items;
-                """
-            )
+        migrate_download_items_schema(conn)
         conn.executescript(
-            """
+            f"""
             CREATE TABLE IF NOT EXISTS import_batches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_name TEXT NOT NULL,
@@ -121,6 +285,8 @@ def init_db(db_path: Optional[Path] = None) -> None:
             );
             """
         )
+        backfill_missing_download_items(conn)
+        refresh_all_batch_counts(conn)
 
 
 def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:

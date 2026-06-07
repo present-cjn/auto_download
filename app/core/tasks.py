@@ -99,7 +99,7 @@ def process_batch(batch_id: int, source_path: Path) -> None:
 
 
 def retry_failed(batch_id: int) -> None:
-    process_download_items(batch_id, failed_only=True)
+    process_download_items(batch_id, failed_only=False)
 
 
 def start_background(target, *args) -> None:

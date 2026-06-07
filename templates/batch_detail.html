@@ -8,7 +8,7 @@
   </div>
   <div class="actions">
     <form method="post" action="/batches/{{ batch.id }}/retry-failed">
-      <button class="button subtle" type="submit" {% if batch.failed_count == 0 %}disabled{% endif %}>重试失败项</button>
+      <button class="button subtle" type="submit" {% if batch.link_count == batch.success_count and batch.failed_count == 0 %}disabled{% endif %}>继续/重试下载</button>
     </form>
     <a class="button primary" href="/batches/{{ batch.id }}/download.zip">下载 ZIP</a>
   </div>
