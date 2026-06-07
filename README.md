@@ -1,8 +1,8 @@
 # Order Design Image Downloader
 
-本项目第一阶段是一个本地订单设计图下载工具：读取客户每天提供的订单 Excel，根据订单号创建目录，并下载 `Design Link` 中的 Google Drive 图片。
+本项目第一阶段是一个轻量订单设计图下载工具：读取客户每天提供的订单 Excel，根据订单号创建目录，并下载 `Design Link` 中的 Google Drive 图片。
 
-后续方向是演进成云端订单管理服务，逐步支持订单维护、物流运单号获取/生成、物流跟踪、生产进度跟踪和导入导出自动化。当前代码先服务最重要的交付目标：稳定下图。
+当前支持 CLI 和轻量 Web 两种运行方式。后续方向是演进成云端订单管理服务，逐步支持订单维护、物流运单号获取/生成、物流跟踪、生产进度跟踪和导入导出自动化。当前代码先服务最重要的交付目标：稳定下图。
 
 ## Setup
 
@@ -14,7 +14,42 @@ python3 -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
-## Dry Run
+## Web Tool
+
+启动轻量 Web 工具：
+
+```bash
+. .venv/bin/activate
+APP_PASSWORD=change-me uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+打开：
+
+```text
+http://localhost:8000
+```
+
+Web 工具支持：
+
+- 上传 `.xlsx` 订单表。
+- 后台解析订单和 SKU 明细。
+- 后台下载设计图。
+- 查看批次、订单、SKU、下载状态和失败原因。
+- 重试失败项。
+- 下载批次 ZIP。
+
+第一版数据保存在：
+
+```text
+data/app.db
+data/uploads/<batch_id>/source.xlsx
+data/orders/<batch_id>/<订单号>/
+data/archives/batch-<batch_id>.zip
+```
+
+`data/` 默认不进入 Git。
+
+## CLI Dry Run
 
 Preview the folders and Google Drive links without downloading:
 
@@ -23,7 +58,7 @@ Preview the folders and Google Drive links without downloading:
 python download_orders.py --dry-run
 ```
 
-## Download
+## CLI Download
 
 Download images into `orders/<订单号>/`:
 
@@ -49,6 +84,8 @@ python download_orders.py --limit 3
 - 图片链接列：`Design Link`
 
 同一个订单号如果出现多个不同 `Design Link`，会全部下载到同一个订单目录。
+
+数据库里会完整保留每一行 SKU 明细。订单号只在订单层去重，不会丢掉同一订单下的多个 SKU。
 
 ## Output
 

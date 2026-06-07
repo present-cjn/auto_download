@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}批次列表{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <h1>批次列表</h1>
+    <p>上传订单 Excel 后，系统会后台下载 Design Link 图片并生成 ZIP。</p>
+  </div>
+  <a class="button primary" href="/uploads/new">上传 Excel</a>
+</section>
+
+{% if batches %}
+<section class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>批次</th>
+        <th>文件</th>
+        <th>状态</th>
+        <th>订单</th>
+        <th>明细</th>
+        <th>链接</th>
+        <th>成功</th>
+        <th>失败</th>
+        <th>创建时间</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for batch in batches %}
+      <tr>
+        <td><a href="/batches/{{ batch.id }}">#{{ batch.id }}</a></td>
+        <td>{{ batch.file_name }}</td>
+        <td><span class="status {{ batch.status }}">{{ batch.status }}</span></td>
+        <td>{{ batch.order_count }}</td>
+        <td>{{ batch.item_count }}</td>
+        <td>{{ batch.link_count }}</td>
+        <td>{{ batch.success_count }}</td>
+        <td>{{ batch.failed_count }}</td>
+        <td>{{ batch.created_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% else %}
+<section class="empty-state">
+  <h2>还没有上传批次</h2>
+  <p>先上传当前订单 Excel，确认解析和下图流程。</p>
+  <a class="button primary" href="/uploads/new">上传 Excel</a>
+</section>
+{% endif %}
+{% endblock %}

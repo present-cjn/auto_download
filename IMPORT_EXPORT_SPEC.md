@@ -70,6 +70,13 @@ Excel 表格
 orders/<订单号>/
 ```
 
+轻量 Web 工具会生成批次目录和 ZIP：
+
+```text
+data/orders/<batch_id>/<订单号>/
+data/archives/batch-<batch_id>.zip
+```
+
 后续建议增加：
 
 - `download_report.csv`：订单号、链接、状态、文件数量、错误原因。

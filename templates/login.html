@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>登录</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body class="auth-page">
+    <main class="auth-panel">
+      <h1>订单设计图下载</h1>
+      <form method="post" action="/login" class="stack">
+        <label for="password">访问密码</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" autofocus>
+        {% if error %}
+        <p class="error">{{ error }}</p>
+        {% endif %}
+        <button class="button primary full" type="submit">进入</button>
+      </form>
+    </main>
+  </body>
+</html>

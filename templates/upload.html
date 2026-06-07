@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}上传 Excel{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <h1>上传订单 Excel</h1>
+    <p>当前支持 `.xlsx`，默认读取工作表 `12`，使用 `订单号` 和 `Design Link` 字段。</p>
+  </div>
+</section>
+
+<form class="upload-panel" method="post" action="/uploads" enctype="multipart/form-data">
+  <label for="file">选择订单表</label>
+  <input id="file" name="file" type="file" accept=".xlsx" required>
+  <button class="button primary" type="submit">上传并开始下图</button>
+</form>
+{% endblock %}

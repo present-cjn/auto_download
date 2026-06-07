@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}批次 #{{ batch.id }}{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <h1>批次 #{{ batch.id }}</h1>
+    <p>{{ batch.file_name }} · <span class="status {{ batch.status }}">{{ batch.status }}</span></p>
+  </div>
+  <div class="actions">
+    <form method="post" action="/batches/{{ batch.id }}/retry-failed">
+      <button class="button subtle" type="submit" {% if batch.failed_count == 0 %}disabled{% endif %}>重试失败项</button>
+    </form>
+    <a class="button primary" href="/batches/{{ batch.id }}/download.zip">下载 ZIP</a>
+  </div>
+</section>
+
+<section class="metrics">
+  <div><span>{{ batch.order_count }}</span><label>订单</label></div>
+  <div><span>{{ batch.item_count }}</span><label>SKU 明细</label></div>
+  <div><span>{{ batch.link_count }}</span><label>下载链接</label></div>
+  <div><span>{{ batch.success_count }}</span><label>成功</label></div>
+  <div><span>{{ batch.failed_count }}</span><label>失败</label></div>
+</section>
+
+{% if batch.error_message %}
+<section class="notice error-block">{{ batch.error_message }}</section>
+{% endif %}
+
+<section class="order-list">
+  {% for order in orders %}
+  <details class="order-block" {% if loop.index <= 5 %}open{% endif %}>
+    <summary>
+      <span>{{ order.order_no }}</span>
+      <small>{{ order.shipping_fullname or "无收件人" }} · {{ order.city or "-" }} {{ order.province or "" }}</small>
+    </summary>
+    <div class="table-wrap compact">
+      <table>
+        <thead>
+          <tr>
+            <th>行</th>
+            <th>SKU</th>
+            <th>尺码</th>
+            <th>颜色</th>
+            <th>数量</th>
+            <th>单号</th>
+            <th>下载状态</th>
+            <th>图片</th>
+            <th>错误</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in order.items %}
+          <tr>
+            <td>{{ item.row_number }}</td>
+            <td>{{ item.sku or "-" }}</td>
+            <td>{{ item.size or "-" }}</td>
+            <td>{{ item.color or "-" }}</td>
+            <td>{{ item.quantity }}</td>
+            <td>{{ item.tracking_no or "-" }}</td>
+            <td><span class="status {{ item.download_status or 'missing' }}">{{ item.download_status or "no_link" }}</span></td>
+            <td>{{ item.download_image_count or 0 }}</td>
+            <td class="error-cell">{{ item.download_error or "" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {% endfor %}
+</section>
+{% endblock %}

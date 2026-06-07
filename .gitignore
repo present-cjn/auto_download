@@ -2,6 +2,7 @@
 .repo.git/
 __pycache__/
 orders/
+data/
 *.log
 *.tmp
 download_report*.csv
