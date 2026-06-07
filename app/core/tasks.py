@@ -6,7 +6,7 @@ import zipfile
 from pathlib import Path
 
 from app.core import database as db
-from app.core.downloader import download_design_images, safe_filename
+from app.core.downloader import cached_drive_folder, copy_images, safe_filename
 from app.core.excel_parser import DEFAULT_SHEET, parse_order_items
 
 
@@ -14,12 +14,14 @@ DATA_DIR = Path("data")
 UPLOADS_DIR = DATA_DIR / "uploads"
 ORDERS_DIR = DATA_DIR / "orders"
 ARCHIVES_DIR = DATA_DIR / "archives"
+CACHE_DIR = DATA_DIR / "cache"
 
 
 def ensure_data_dirs() -> None:
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     ORDERS_DIR.mkdir(parents=True, exist_ok=True)
     ARCHIVES_DIR.mkdir(parents=True, exist_ok=True)
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def parse_batch(batch_id: int, source_path: Path, sheet_name: str = DEFAULT_SHEET) -> None:
@@ -57,7 +59,8 @@ def process_one_download_item(item: dict) -> None:
     try:
         sku_dir = safe_filename(item["item_sku"] or item["sku"] or f"row-{item['row_number']}")
         target_dir = ORDERS_DIR / str(batch_id) / item["order_no"] / sku_dir
-        copied_files = download_design_images(item["design_link"], target_dir)
+        source_dir = cached_drive_folder(item["design_link"], CACHE_DIR / str(batch_id))
+        copied_files = copy_images(source_dir, target_dir)
         for copied in copied_files:
             db.add_downloaded_file(
                 download_item_id=download_item_id,
@@ -145,6 +148,7 @@ def save_upload(batch_id: int, filename: str, content: bytes) -> Path:
 def remove_batch_files(batch_id: int) -> None:
     shutil.rmtree(UPLOADS_DIR / str(batch_id), ignore_errors=True)
     shutil.rmtree(ORDERS_DIR / str(batch_id), ignore_errors=True)
+    shutil.rmtree(CACHE_DIR / str(batch_id), ignore_errors=True)
     archive_path = ARCHIVES_DIR / f"batch-{batch_id}.zip"
     if archive_path.exists():
         archive_path.unlink()
