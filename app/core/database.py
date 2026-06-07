@@ -194,6 +194,46 @@ def refresh_all_batch_counts(conn: sqlite3.Connection) -> None:
         )
 
 
+def reconcile_interrupted_batches(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT id, status, success_count, failed_count
+        FROM import_batches
+        WHERE status IN ('downloading', 'parsing', 'pending')
+        """
+    ).fetchall()
+    for row in rows:
+        batch_id = int(row["id"])
+        active_downloads = conn.execute(
+            """
+            SELECT COUNT(*) FROM download_items
+            WHERE batch_id = ? AND status = 'downloading'
+            """,
+            (batch_id,),
+        ).fetchone()[0]
+        item_count = conn.execute(
+            "SELECT COUNT(*) FROM order_items WHERE batch_id = ?", (batch_id,)
+        ).fetchone()[0]
+        if active_downloads:
+            continue
+        if row["status"] == "pending" and item_count == 0:
+            continue
+        if item_count == 0:
+            next_status = "pending"
+        elif int(row["success_count"]) > 0 or int(row["failed_count"]) > 0:
+            next_status = "completed_with_errors"
+        else:
+            next_status = "review_ready"
+        conn.execute(
+            """
+            UPDATE import_batches
+            SET status = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (next_status, batch_id),
+        )
+
+
 def init_db(db_path: Optional[Path] = None) -> None:
     with connect(db_path) as conn:
         migrate_download_items_schema(conn)
@@ -287,6 +327,7 @@ def init_db(db_path: Optional[Path] = None) -> None:
         )
         backfill_missing_download_items(conn)
         refresh_all_batch_counts(conn)
+        reconcile_interrupted_batches(conn)
 
 
 def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -569,6 +610,39 @@ def get_failed_download_items(batch_id: int) -> list[dict[str, Any]]:
             (batch_id,),
         ).fetchall()
         return [row_to_dict(row) for row in rows]
+
+
+def get_download_item(download_item_id: int) -> Optional[dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                di.*,
+                oi.sku AS item_sku
+            FROM download_items di
+            JOIN order_items oi ON oi.id = di.order_item_id
+            WHERE di.id = ?
+            """,
+            (download_item_id,),
+        ).fetchone()
+        return row_to_dict(row) if row else None
+
+
+def get_batch_status_counts(batch_id: int) -> dict[str, int]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM download_items
+            WHERE batch_id = ?
+            GROUP BY status
+            """,
+            (batch_id,),
+        ).fetchall()
+        counts = {row["status"]: int(row["count"]) for row in rows}
+        for status in ["pending", "downloading", "downloaded", "failed", "skipped"]:
+            counts.setdefault(status, 0)
+        return counts
 
 
 def mark_download_started(download_item_id: int) -> None:

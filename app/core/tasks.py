@@ -22,12 +22,12 @@ def ensure_data_dirs() -> None:
     ARCHIVES_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def import_excel_batch(batch_id: int, source_path: Path, sheet_name: str = DEFAULT_SHEET) -> None:
+def parse_batch(batch_id: int, source_path: Path, sheet_name: str = DEFAULT_SHEET) -> None:
     db.update_batch_status(batch_id, "parsing")
     try:
         items = parse_order_items(source_path, sheet_name)
         db.insert_import_items(batch_id, items)
-        db.update_batch_status(batch_id, "queued")
+        db.update_batch_status(batch_id, "review_ready")
     except Exception as exc:  # noqa: BLE001 - surface parsing failure in UI.
         db.update_batch_status(batch_id, "failed", str(exc))
         raise
@@ -49,38 +49,33 @@ def create_archive(batch_id: int) -> Path:
     return archive_path
 
 
-def process_download_items(batch_id: int, failed_only: bool = False) -> None:
-    db.update_batch_status(batch_id, "downloading")
-    items = (
-        db.get_failed_download_items(batch_id)
-        if failed_only
-        else db.get_pending_download_items(batch_id)
-    )
+def process_one_download_item(item: dict) -> None:
+    download_item_id = int(item["id"])
+    batch_id = int(item["batch_id"])
+    db.clear_downloaded_files(download_item_id)
+    db.mark_download_started(download_item_id)
+    try:
+        sku_dir = safe_filename(item["item_sku"] or item["sku"] or f"row-{item['row_number']}")
+        target_dir = ORDERS_DIR / str(batch_id) / item["order_no"] / sku_dir
+        copied_files = download_design_images(item["design_link"], target_dir)
+        for copied in copied_files:
+            db.add_downloaded_file(
+                download_item_id=download_item_id,
+                batch_id=batch_id,
+                order_id=int(item["order_id"]),
+                order_no=item["order_no"],
+                file_name=copied.file_name,
+                local_path=copied.local_path,
+                file_size=copied.file_size,
+            )
+        db.mark_download_success(download_item_id, len(copied_files))
+    except Exception as exc:  # noqa: BLE001 - keep the batch running.
+        db.mark_download_failed(download_item_id, str(exc))
+    finally:
+        db.refresh_batch_counts(batch_id)
 
-    for item in items:
-        download_item_id = int(item["id"])
-        db.clear_downloaded_files(download_item_id)
-        db.mark_download_started(download_item_id)
-        try:
-            sku_dir = safe_filename(item["item_sku"] or f"row-{item['row_number']}")
-            target_dir = ORDERS_DIR / str(batch_id) / item["order_no"] / sku_dir
-            copied_files = download_design_images(item["design_link"], target_dir)
-            for copied in copied_files:
-                db.add_downloaded_file(
-                    download_item_id=download_item_id,
-                    batch_id=batch_id,
-                    order_id=int(item["order_id"]),
-                    order_no=item["order_no"],
-                    file_name=copied.file_name,
-                    local_path=copied.local_path,
-                    file_size=copied.file_size,
-                )
-            db.mark_download_success(download_item_id, len(copied_files))
-        except Exception as exc:  # noqa: BLE001 - keep the batch running.
-            db.mark_download_failed(download_item_id, str(exc))
-        finally:
-            db.refresh_batch_counts(batch_id)
 
+def finish_download_batch(batch_id: int) -> None:
     create_archive(batch_id)
     db.refresh_batch_counts(batch_id)
     batch = db.get_batch(batch_id)
@@ -90,16 +85,47 @@ def process_download_items(batch_id: int, failed_only: bool = False) -> None:
         db.update_batch_status(batch_id, "completed")
 
 
+def process_download_items(batch_id: int, failed_only: bool = False) -> None:
+    db.update_batch_status(batch_id, "downloading")
+    items = (
+        db.get_failed_download_items(batch_id)
+        if failed_only
+        else db.get_pending_download_items(batch_id)
+    )
+
+    for item in items:
+        process_one_download_item(item)
+
+    finish_download_batch(batch_id)
+
+
+def process_download_item(download_item_id: int) -> None:
+    item = db.get_download_item(download_item_id)
+    if not item:
+        return
+    batch_id = int(item["batch_id"])
+    db.update_batch_status(batch_id, "downloading")
+    process_one_download_item(item)
+    finish_download_batch(batch_id)
+
+
 def process_batch(batch_id: int, source_path: Path) -> None:
     try:
-        import_excel_batch(batch_id, source_path)
-        process_download_items(batch_id)
+        parse_batch(batch_id, source_path)
     except Exception:
         db.refresh_batch_counts(batch_id)
 
 
-def retry_failed(batch_id: int) -> None:
+def start_download(batch_id: int) -> None:
     process_download_items(batch_id, failed_only=False)
+
+
+def retry_failed(batch_id: int) -> None:
+    process_download_items(batch_id, failed_only=True)
+
+
+def retry_download_item(download_item_id: int) -> None:
+    process_download_item(download_item_id)
 
 
 def start_background(target, *args) -> None:

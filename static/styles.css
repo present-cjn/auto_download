@@ -136,6 +136,14 @@ p {
   color: var(--text);
 }
 
+.button.tiny {
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
 .button.full {
   width: 100%;
 }
@@ -274,6 +282,77 @@ input[type="password"] {
   font-size: 13px;
 }
 
+.workflow {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-bottom: 16px;
+}
+
+.step {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+  min-height: 44px;
+  padding: 11px 12px;
+  text-align: center;
+}
+
+.step.done {
+  background: #e8f5ec;
+  border-color: #b8dfc2;
+  color: var(--success);
+}
+
+.step.active {
+  background: #eaf1ff;
+  border-color: #bad0ff;
+  color: var(--info);
+}
+
+.progress-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 14px;
+}
+
+.progress-copy {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.progress-copy span,
+.muted {
+  color: var(--muted);
+}
+
+.progress-bar {
+  background: #edf1f6;
+  border-radius: 999px;
+  height: 12px;
+  overflow: hidden;
+}
+
+.progress-bar div {
+  background: var(--primary);
+  height: 100%;
+  transition: width 200ms ease;
+}
+
+.notice {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+}
+
 .order-list {
   display: grid;
   gap: 12px;
@@ -306,6 +385,26 @@ input[type="password"] {
 .error-cell {
   color: var(--danger);
   max-width: 320px;
+}
+
+.row-failed {
+  background: #fffafa;
+}
+
+.sku-cell {
+  font-weight: 700;
+}
+
+.link-action {
+  white-space: nowrap;
+}
+
+.action-cell {
+  min-width: 180px;
+}
+
+.action-cell form {
+  margin: 0 0 6px;
 }
 
 .error-block {
@@ -348,6 +447,15 @@ input[type="password"] {
 
   .metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workflow {
+    grid-template-columns: 1fr;
+  }
+
+  .progress-copy {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   h1 {

@@ -14,8 +14,10 @@ from app.core.tasks import (
     ARCHIVES_DIR,
     ensure_data_dirs,
     process_batch,
+    retry_download_item,
     retry_failed,
     save_upload,
+    start_download,
     start_background,
 )
 
@@ -120,10 +122,41 @@ def batch_detail(request: Request, batch_id: int):
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
     orders = db.get_batch_orders(batch_id)
+    status_counts = db.get_batch_status_counts(batch_id)
+    progress_percent = 0
+    if int(batch["link_count"]) > 0:
+        progress_percent = round(
+            int(batch["success_count"]) * 100 / int(batch["link_count"])
+        )
     return templates.TemplateResponse(
         "batch_detail.html",
-        {"request": request, "batch": batch, "orders": orders},
+        {
+            "request": request,
+            "batch": batch,
+            "orders": orders,
+            "status_counts": status_counts,
+            "progress_percent": progress_percent,
+        },
     )
+
+
+@app.get("/batches/{batch_id}/status")
+def batch_status(request: Request, batch_id: int):
+    require_auth(request)
+    batch = db.get_batch(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    return {"batch": batch, "status_counts": db.get_batch_status_counts(batch_id)}
+
+
+@app.post("/batches/{batch_id}/start-download")
+def start_batch_download(request: Request, batch_id: int):
+    require_auth(request)
+    batch = db.get_batch(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    start_background(start_download, batch_id)
+    return RedirectResponse(f"/batches/{batch_id}", status_code=303)
 
 
 @app.post("/batches/{batch_id}/retry-failed")
@@ -134,6 +167,16 @@ def retry_failed_items(request: Request, batch_id: int):
         raise HTTPException(status_code=404, detail="Batch not found")
     start_background(retry_failed, batch_id)
     return RedirectResponse(f"/batches/{batch_id}", status_code=303)
+
+
+@app.post("/download-items/{download_item_id}/retry")
+def retry_one_download_item(request: Request, download_item_id: int):
+    require_auth(request)
+    item = db.get_download_item(download_item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Download item not found")
+    start_background(retry_download_item, download_item_id)
+    return RedirectResponse(f"/batches/{item['batch_id']}", status_code=303)
 
 
 @app.get("/batches/{batch_id}/download.zip")
