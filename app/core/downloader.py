@@ -58,6 +58,7 @@ ERROR_LABELS = {
     "invalid_drive_url": "链接格式错误",
     "drive_download_failed": "Drive 下载失败",
     "no_images_found": "未找到图片",
+    "interrupted": "任务中断",
     "unknown_error": "未知错误",
 }
 

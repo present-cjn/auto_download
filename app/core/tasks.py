@@ -35,6 +35,12 @@ def ensure_data_dirs() -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def ensure_batch_order_dir(batch_id: int) -> Path:
+    batch_order_dir = ORDERS_DIR / str(batch_id)
+    batch_order_dir.mkdir(parents=True, exist_ok=True)
+    return batch_order_dir
+
+
 def parse_batch(
     batch_id: int, source_path: Path, sheet_name: Optional[str] = None
 ) -> None:
@@ -48,6 +54,7 @@ def parse_batch(
         summary["available_sheet_names"] = available_sheet_names
         db.set_batch_import_summary(batch_id, summary)
         db.insert_import_items(batch_id, items)
+        ensure_batch_order_dir(batch_id)
         db.update_batch_status(
             batch_id,
             "review_ready" if summary.get("can_start_download", True) else "needs_fix",
@@ -151,6 +158,7 @@ def finish_download_batch(batch_id: int) -> None:
 
 
 def process_download_items(batch_id: int, failed_only: bool = False) -> None:
+    ensure_batch_order_dir(batch_id)
     db.update_batch_status(batch_id, "downloading")
     items = (
         db.get_failed_download_items(batch_id)
@@ -169,6 +177,7 @@ def process_download_item(download_item_id: int) -> None:
     if not item:
         return
     batch_id = int(item["batch_id"])
+    ensure_batch_order_dir(batch_id)
     db.update_batch_status(batch_id, "downloading")
     process_one_download_item(item)
     finish_download_batch(batch_id)

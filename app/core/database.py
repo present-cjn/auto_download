@@ -231,58 +231,84 @@ def backfill_missing_download_items(conn: sqlite3.Connection) -> None:
 def refresh_all_batch_counts(conn: sqlite3.Connection) -> None:
     rows = conn.execute("SELECT id FROM import_batches").fetchall()
     for row in rows:
-        batch_id = int(row["id"])
-        order_count = conn.execute(
-            "SELECT COUNT(*) FROM orders WHERE batch_id = ?", (batch_id,)
-        ).fetchone()[0]
-        item_count = conn.execute(
-            "SELECT COUNT(*) FROM order_items WHERE batch_id = ?", (batch_id,)
-        ).fetchone()[0]
-        link_count = conn.execute(
-            "SELECT COUNT(*) FROM download_items WHERE batch_id = ?", (batch_id,)
-        ).fetchone()[0]
-        success_count = conn.execute(
-            """
-            SELECT COUNT(*) FROM download_items
-            WHERE batch_id = ? AND status = 'downloaded'
-            """,
-            (batch_id,),
-        ).fetchone()[0]
-        failed_count = conn.execute(
-            """
-            SELECT COUNT(*) FROM download_items
-            WHERE batch_id = ? AND status = 'failed'
-            """,
-            (batch_id,),
-        ).fetchone()[0]
-        skipped_count = conn.execute(
-            """
-            SELECT COUNT(*) FROM download_items
-            WHERE batch_id = ? AND status = 'skipped'
-            """,
-            (batch_id,),
-        ).fetchone()[0]
-        conn.execute(
-            """
-            UPDATE import_batches
-            SET order_count = ?, item_count = ?, link_count = ?,
-                success_count = ?, failed_count = ?, skipped_count = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (
-                order_count,
-                item_count,
-                link_count,
-                success_count,
-                failed_count,
-                skipped_count,
-                batch_id,
-            ),
-        )
+        refresh_batch_counts_with_conn(conn, int(row["id"]))
+
+
+def refresh_batch_counts_with_conn(conn: sqlite3.Connection, batch_id: int) -> None:
+    order_count = conn.execute(
+        "SELECT COUNT(*) FROM orders WHERE batch_id = ?", (batch_id,)
+    ).fetchone()[0]
+    item_count = conn.execute(
+        "SELECT COUNT(*) FROM order_items WHERE batch_id = ?", (batch_id,)
+    ).fetchone()[0]
+    link_count = conn.execute(
+        "SELECT COUNT(*) FROM download_items WHERE batch_id = ?", (batch_id,)
+    ).fetchone()[0]
+    success_count = conn.execute(
+        """
+        SELECT COUNT(*) FROM download_items
+        WHERE batch_id = ? AND status = 'downloaded'
+        """,
+        (batch_id,),
+    ).fetchone()[0]
+    failed_count = conn.execute(
+        """
+        SELECT COUNT(*) FROM download_items
+        WHERE batch_id = ? AND status = 'failed'
+        """,
+        (batch_id,),
+    ).fetchone()[0]
+    skipped_count = conn.execute(
+        """
+        SELECT COUNT(*) FROM download_items
+        WHERE batch_id = ? AND status = 'skipped'
+        """,
+        (batch_id,),
+    ).fetchone()[0]
+    conn.execute(
+        """
+        UPDATE import_batches
+        SET order_count = ?, item_count = ?, link_count = ?,
+            success_count = ?, failed_count = ?, skipped_count = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (
+            order_count,
+            item_count,
+            link_count,
+            success_count,
+            failed_count,
+            skipped_count,
+            batch_id,
+        ),
+    )
 
 
 def reconcile_interrupted_batches(conn: sqlite3.Connection) -> None:
+    interrupted_rows = conn.execute(
+        """
+        SELECT DISTINCT batch_id
+        FROM download_items
+        WHERE status = 'downloading'
+        """
+    ).fetchall()
+    interrupted_batch_ids = [int(row["batch_id"]) for row in interrupted_rows]
+    if interrupted_batch_ids:
+        conn.execute(
+            """
+            UPDATE download_items
+            SET status = 'failed',
+                error_message = '服务中断或下载任务未正常结束，请重试。',
+                error_code = 'interrupted',
+                error_detail = 'Recovered from stale downloading status on startup.',
+                completed_at = CURRENT_TIMESTAMP
+            WHERE status = 'downloading'
+            """
+        )
+        for batch_id in interrupted_batch_ids:
+            refresh_batch_counts_with_conn(conn, batch_id)
+
     rows = conn.execute(
         """
         SELECT id, status, success_count, failed_count
@@ -292,24 +318,25 @@ def reconcile_interrupted_batches(conn: sqlite3.Connection) -> None:
     ).fetchall()
     for row in rows:
         batch_id = int(row["id"])
-        active_downloads = conn.execute(
-            """
-            SELECT COUNT(*) FROM download_items
-            WHERE batch_id = ? AND status = 'downloading'
-            """,
-            (batch_id,),
-        ).fetchone()[0]
         item_count = conn.execute(
             "SELECT COUNT(*) FROM order_items WHERE batch_id = ?", (batch_id,)
         ).fetchone()[0]
-        if active_downloads:
-            continue
         if row["status"] == "pending" and item_count == 0:
             continue
+        current_counts = conn.execute(
+            """
+            SELECT success_count, failed_count
+            FROM import_batches
+            WHERE id = ?
+            """,
+            (batch_id,),
+        ).fetchone()
         if item_count == 0:
             next_status = "pending"
-        elif int(row["success_count"]) > 0 or int(row["failed_count"]) > 0:
+        elif int(current_counts["failed_count"]) > 0:
             next_status = "completed_with_errors"
+        elif int(current_counts["success_count"]) > 0:
+            next_status = "completed"
         else:
             next_status = "review_ready"
         conn.execute(

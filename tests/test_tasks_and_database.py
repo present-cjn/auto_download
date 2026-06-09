@@ -5,7 +5,7 @@ from zipfile import ZipFile
 
 from app.core import database as db
 from app.core.excel_parser import OrderItemRow
-from app.core.tasks import create_order_archive
+from app.core.tasks import create_order_archive, parse_batch
 
 
 def order_item(
@@ -114,5 +114,54 @@ def test_create_order_archive_keeps_order_root(tmp_path: Path, monkeypatch) -> N
         with ZipFile(archive_path) as archive:
             assert archive.namelist() == ["SKU-A/image.jpg"]
             assert archive.read("SKU-A/image.jpg") == b"image"
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_parse_batch_creates_empty_batch_order_dir(tmp_path: Path, monkeypatch) -> None:
+    database_path = tmp_path / "app.db"
+    orders_dir = tmp_path / "orders"
+    original_path = db.DB_PATH
+    db.DB_PATH = database_path
+    monkeypatch.setattr("app.core.tasks.ORDERS_DIR", orders_dir)
+    monkeypatch.setattr("app.core.tasks.list_worksheet_names", lambda source_path, visible_only=True: ["sheet1"])
+    monkeypatch.setattr("app.core.tasks.single_visible_worksheet_name", lambda source_path: "sheet1")
+    monkeypatch.setattr("app.core.tasks.parse_order_items", lambda source_path, sheet_name: [order_item()])
+    try:
+        db.init_db(database_path)
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"))
+
+        parse_batch(batch_id, Path("source.xlsx"), sheet_name=None)
+
+        assert (orders_dir / str(batch_id)).is_dir()
+        assert db.get_batch(batch_id)["status"] == "review_ready"
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_init_db_recovers_stale_downloading_items(tmp_path: Path) -> None:
+    database_path = tmp_path / "app.db"
+    original_path = db.DB_PATH
+    db.DB_PATH = database_path
+    try:
+        db.init_db(database_path)
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"))
+        db.insert_import_items(batch_id, [order_item()])
+        item = db.get_pending_download_items(batch_id)[0]
+        db.update_batch_status(batch_id, "downloading")
+        db.mark_download_started(int(item["id"]))
+
+        db.init_db(database_path)
+
+        recovered = db.get_download_item(int(item["id"]))
+        batch = db.get_batch(batch_id)
+        assert recovered is not None
+        assert recovered["status"] == "failed"
+        assert recovered["error_code"] == "interrupted"
+        assert "服务中断" in recovered["error_message"]
+        assert batch is not None
+        assert batch["status"] == "completed_with_errors"
+        assert int(batch["failed_count"]) == 1
+        assert [row["id"] for row in db.get_failed_download_items(batch_id)] == [item["id"]]
     finally:
         db.DB_PATH = original_path
