@@ -97,6 +97,10 @@ def template_context(request: Request, user: dict, **extra):
     return context
 
 
+def sort_rows_by_excel_row(rows: list[dict]) -> list[dict]:
+    return sorted(rows, key=lambda row: int(row["item"].get("row_number") or 0))
+
+
 @app.on_event("startup")
 def startup() -> None:
     ensure_data_dirs()
@@ -283,6 +287,8 @@ def batch_detail(request: Request, batch_id: int):
                 for download_item in item.get("download_items", []):
                     if download_item.get("download_status") == "failed":
                         failed_rows.append({**row, "download_item": download_item})
+    display_rows = sort_rows_by_excel_row(display_rows)
+    failed_rows = sort_rows_by_excel_row(failed_rows)
     status_counts = db.get_batch_status_counts(batch_id)
     handled_count = int(batch["success_count"]) + int(status_counts["manual_done"])
     progress_percent = 0
