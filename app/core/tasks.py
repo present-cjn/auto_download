@@ -117,10 +117,16 @@ def create_order_archive(batch_id: int, order_id: int) -> Path:
 def process_one_download_item(item: dict) -> None:
     download_item_id = int(item["id"])
     batch_id = int(item["batch_id"])
+    source_type = item.get("source_type") or "design"
+    sku = item["item_sku"] or item["sku"] or f"row-{item['row_number']}"
     db.clear_downloaded_files(download_item_id)
     db.mark_download_started(download_item_id)
     try:
-        sku_dir = safe_filename(item["item_sku"] or item["sku"] or f"row-{item['row_number']}")
+        print(
+            f"[batch {batch_id}] downloading {source_type} for {sku}: {item['design_link']}",
+            flush=True,
+        )
+        sku_dir = safe_filename(sku)
         target_dir = ORDERS_DIR / str(batch_id) / sku_dir
         source_dir = cached_drive_folder(item["design_link"], CACHE_DIR / str(batch_id))
         copied_files = copy_images(source_dir, target_dir)
@@ -135,6 +141,10 @@ def process_one_download_item(item: dict) -> None:
                 file_size=copied.file_size,
             )
         db.mark_download_success(download_item_id, len(copied_files))
+        print(
+            f"[batch {batch_id}] downloaded {len(copied_files)} image(s) for {sku} ({source_type})",
+            flush=True,
+        )
     except Exception as exc:  # noqa: BLE001 - keep the batch running.
         failure = classify_download_failure(exc)
         db.mark_download_failed(
@@ -142,6 +152,10 @@ def process_one_download_item(item: dict) -> None:
             failure.message,
             error_code=failure.code,
             error_detail=failure.detail,
+        )
+        print(
+            f"[batch {batch_id}] failed {source_type} for {sku}: {failure.message}",
+            flush=True,
         )
     finally:
         db.refresh_batch_counts(batch_id)

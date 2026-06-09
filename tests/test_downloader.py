@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 import requests
 
 from app.core.downloader import (
     DriveDownloadError,
+    DriveDownloadTimeout,
     cached_drive_folder,
     classify_download_failure,
     copy_images,
@@ -15,6 +17,7 @@ from app.core.downloader import (
     is_google_drive_url,
     next_available_path,
     parse_drive_resource,
+    run_download_with_timeout,
     safe_filename,
 )
 
@@ -110,6 +113,30 @@ def test_cached_drive_folder_uses_resource_kind_prefix(tmp_path: Path, monkeypat
 
     assert cache_dir == tmp_path / "file-file123"
     assert (cache_dir / "mockup.jpg").exists()
+
+
+def test_run_download_with_timeout_raises_timeout(tmp_path: Path) -> None:
+    def slow_download(resource_id: str, output_dir: Path) -> None:
+        time.sleep(2)
+
+    try:
+        run_download_with_timeout(
+            slow_download,
+            "folder123",
+            tmp_path,
+            timeout_seconds=1,
+        )
+    except DriveDownloadTimeout as exc:
+        assert "超过 1 秒" in str(exc)
+    else:
+        raise AssertionError("Expected DriveDownloadTimeout")
+
+
+def test_classify_download_timeout() -> None:
+    failure = classify_download_failure(DriveDownloadTimeout("too slow"))
+
+    assert failure.code == "download_timeout"
+    assert "超时" in failure.message
 
 
 def test_classify_download_failure() -> None:

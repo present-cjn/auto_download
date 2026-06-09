@@ -5,8 +5,10 @@ import shutil
 import tempfile
 import time
 from dataclasses import dataclass
+from multiprocessing import Process, Queue
 from pathlib import Path
-from typing import Iterable, Literal, Optional
+from queue import Empty
+from typing import Callable, Iterable, Literal, Optional
 from urllib.parse import urlparse
 import os
 
@@ -23,6 +25,7 @@ IMAGE_EXTENSIONS = {
     ".tif",
     ".tiff",
 }
+DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 180
 
 
 @dataclass(frozen=True)
@@ -53,10 +56,15 @@ class DriveNetworkError(DriveDownloadError):
     pass
 
 
+class DriveDownloadTimeout(DriveDownloadError):
+    pass
+
+
 ERROR_LABELS = {
     "network_error": "网络连接失败",
     "invalid_drive_url": "链接格式错误",
     "drive_download_failed": "Drive 下载失败",
+    "download_timeout": "下载超时",
     "no_images_found": "未找到图片",
     "interrupted": "任务中断",
     "unknown_error": "未知错误",
@@ -137,6 +145,61 @@ def import_gdown():
     return gdown
 
 
+def drive_download_timeout_seconds() -> int:
+    raw_value = os.getenv("DRIVE_DOWNLOAD_TIMEOUT_SECONDS", "")
+    if not raw_value:
+        return DEFAULT_DOWNLOAD_TIMEOUT_SECONDS
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return DEFAULT_DOWNLOAD_TIMEOUT_SECONDS
+    return max(1, value)
+
+
+def _run_download_worker(
+    download_func: Callable[[str, Path], None], resource_id: str, output_dir: str, queue: Queue
+) -> None:
+    try:
+        download_func(resource_id, Path(output_dir))
+    except BaseException as exc:  # noqa: BLE001 - serialize child-process failures.
+        queue.put(("error", exc.__class__.__name__, str(exc)))
+    else:
+        queue.put(("ok", "", ""))
+
+
+def run_download_with_timeout(
+    download_func: Callable[[str, Path], None],
+    resource_id: str,
+    output_dir: Path,
+    timeout_seconds: Optional[int] = None,
+) -> None:
+    timeout = timeout_seconds or drive_download_timeout_seconds()
+    queue: Queue = Queue(maxsize=1)
+    process = Process(
+        target=_run_download_worker,
+        args=(download_func, resource_id, str(output_dir), queue),
+    )
+    process.start()
+    process.join(timeout)
+    if process.is_alive():
+        process.terminate()
+        process.join(5)
+        if process.is_alive():
+            process.kill()
+            process.join()
+        raise DriveDownloadTimeout(f"Google Drive 下载超过 {timeout} 秒，已终止。")
+
+    try:
+        status, exc_type, message = queue.get_nowait()
+    except Empty:
+        if process.exitcode == 0:
+            return
+        raise DriveDownloadError(f"Google Drive 下载进程异常退出: {process.exitcode}")
+    if status == "ok":
+        return
+    raise DriveDownloadError(f"{exc_type}: {message}")
+
+
 def classify_download_failure(exc: Exception) -> DownloadFailure:
     message = str(exc)
     network_types = (
@@ -154,6 +217,12 @@ def classify_download_failure(exc: Exception) -> DownloadFailure:
         return DownloadFailure(
             code="invalid_drive_url",
             message=message or "Google Drive 链接格式不正确。",
+            detail=message,
+        )
+    if isinstance(exc, DriveDownloadTimeout):
+        return DownloadFailure(
+            code="download_timeout",
+            message="Google Drive 下载超时，可重试；多次失败请手动打开 Drive 下载。",
             detail=message,
         )
     if isinstance(exc, DriveDownloadError) and "no image files" in message:
@@ -293,9 +362,9 @@ def cached_drive_folder(url: str, cache_root: Path) -> Path:
         shutil.rmtree(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     if resource.kind == "folder":
-        download_drive_folder_by_id(resource.resource_id, cache_dir)
+        run_download_with_timeout(download_drive_folder_by_id, resource.resource_id, cache_dir)
     else:
-        download_drive_file_by_id(resource.resource_id, cache_dir)
+        run_download_with_timeout(download_drive_file_by_id, resource.resource_id, cache_dir)
     if not any(iter_image_files(cache_dir)):
         raise DriveDownloadError("Google Drive resource downloaded, but no image files were found")
     return cache_dir

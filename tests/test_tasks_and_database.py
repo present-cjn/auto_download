@@ -5,7 +5,8 @@ from zipfile import ZipFile
 
 from app.core import database as db
 from app.core.excel_parser import OrderItemRow
-from app.core.tasks import create_order_archive, parse_batch
+from app.core.downloader import DriveDownloadTimeout
+from app.core.tasks import create_order_archive, parse_batch, process_download_items
 
 
 def order_item(
@@ -163,5 +164,63 @@ def test_init_db_recovers_stale_downloading_items(tmp_path: Path) -> None:
         assert batch["status"] == "completed_with_errors"
         assert int(batch["failed_count"]) == 1
         assert [row["id"] for row in db.get_failed_download_items(batch_id)] == [item["id"]]
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_download_timeout_does_not_stop_following_items(tmp_path: Path, monkeypatch) -> None:
+    database_path = tmp_path / "app.db"
+    orders_dir = tmp_path / "orders"
+    cache_dir = tmp_path / "cache"
+    original_path = db.DB_PATH
+    db.DB_PATH = database_path
+    monkeypatch.setattr("app.core.tasks.ORDERS_DIR", orders_dir)
+    monkeypatch.setattr("app.core.tasks.CACHE_DIR", cache_dir)
+
+    calls = []
+
+    def fake_cached_drive_folder(url: str, cache_root: Path) -> Path:
+        calls.append(url)
+        if "slow" in url:
+            raise DriveDownloadTimeout("too slow")
+        source = cache_root / "ok"
+        source.mkdir(parents=True, exist_ok=True)
+        (source / "image.jpg").write_bytes(b"jpg")
+        return source
+
+    monkeypatch.setattr("app.core.tasks.cached_drive_folder", fake_cached_drive_folder)
+    try:
+        db.init_db(database_path)
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"))
+        db.insert_import_items(
+            batch_id,
+            [
+                order_item(
+                    row_number=2,
+                    sku="SKU-SLOW",
+                    design_link="https://drive.google.com/drive/folders/slow",
+                ),
+                order_item(
+                    order_no="ORD-2",
+                    row_number=3,
+                    sku="SKU-OK",
+                    design_link="https://drive.google.com/drive/folders/ok",
+                ),
+            ],
+        )
+
+        process_download_items(batch_id)
+
+        batch = db.get_batch(batch_id)
+        status_counts = db.get_batch_status_counts(batch_id)
+        assert calls == [
+            "https://drive.google.com/drive/folders/slow",
+            "https://drive.google.com/drive/folders/ok",
+        ]
+        assert batch is not None
+        assert batch["status"] == "completed_with_errors"
+        assert status_counts["failed"] == 1
+        assert status_counts["downloaded"] == 1
+        assert (orders_dir / str(batch_id) / "SKU-OK" / "image.jpg").exists()
     finally:
         db.DB_PATH = original_path

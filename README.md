@@ -23,6 +23,8 @@ python -m pip install -r requirements.txt
 ADMIN_USERNAME=admin ADMIN_PASSWORD=change-me uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
+单个 Google Drive 下载任务默认 180 秒超时；可用 `DRIVE_DOWNLOAD_TIMEOUT_SECONDS` 调整，例如测试时设为 `60`。
+
 打开：
 
 ```text
