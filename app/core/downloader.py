@@ -6,8 +6,9 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Literal, Optional
 from urllib.parse import urlparse
+import os
 
 import requests
 
@@ -38,6 +39,12 @@ class DownloadFailure:
     detail: str
 
 
+@dataclass(frozen=True)
+class DriveResource:
+    kind: Literal["folder", "file"]
+    resource_id: str
+
+
 class DriveDownloadError(RuntimeError):
     pass
 
@@ -60,15 +67,34 @@ def is_google_drive_url(url: str) -> bool:
     return host == "drive.google.com" or host.endswith(".drive.google.com")
 
 
-def extract_drive_folder_id(url: str) -> str:
+def parse_drive_resource(url: str) -> DriveResource:
     parsed = urlparse(url)
     if not is_google_drive_url(url):
         raise ValueError("不是 Google Drive 链接")
 
-    match = re.search(r"/drive/folders/([^/?#]+)", parsed.path)
-    if match:
-        return match.group(1)
-    raise ValueError("Google Drive 链接中没有找到文件夹 ID")
+    folder_match = re.search(r"/drive/folders/([^/?#]+)", parsed.path)
+    if folder_match:
+        return DriveResource("folder", folder_match.group(1))
+
+    file_match = re.search(r"/file/d/([^/?#]+)", parsed.path)
+    if file_match:
+        return DriveResource("file", file_match.group(1))
+
+    raise ValueError("Google Drive 链接中没有找到文件夹或文件 ID")
+
+
+def extract_drive_folder_id(url: str) -> str:
+    resource = parse_drive_resource(url)
+    if resource.kind != "folder":
+        raise ValueError("Google Drive 链接不是文件夹链接")
+    return resource.resource_id
+
+
+def extract_drive_file_id(url: str) -> str:
+    resource = parse_drive_resource(url)
+    if resource.kind != "file":
+        raise ValueError("Google Drive 链接不是文件链接")
+    return resource.resource_id
 
 
 def safe_filename(name: str) -> str:
@@ -153,6 +179,14 @@ def download_drive_folder(url: str, temp_dir: Path) -> None:
     download_drive_folder_by_id(folder_id, temp_dir)
 
 
+def download_drive_resource(url: str, output_dir: Path) -> None:
+    resource = parse_drive_resource(url)
+    if resource.kind == "folder":
+        download_drive_folder_by_id(resource.resource_id, output_dir)
+    else:
+        download_drive_file_by_id(resource.resource_id, output_dir)
+
+
 def download_drive_folder_by_id(folder_id: str, output_dir: Path) -> None:
     gdown = import_gdown()
     attempts = [
@@ -188,6 +222,40 @@ def download_drive_folder_by_id(folder_id: str, output_dir: Path) -> None:
     raise last_error
 
 
+def download_drive_file_by_id(file_id: str, output_dir: Path) -> None:
+    gdown = import_gdown()
+    attempts = [
+        {"use_cookies": False, "delay": 0},
+        {"use_cookies": False, "delay": 3},
+        {"use_cookies": True, "delay": 10},
+    ]
+    last_error: Optional[Exception] = None
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for attempt in attempts:
+        if attempt["delay"]:
+            time.sleep(int(attempt["delay"]))
+        try:
+            result = gdown.download(
+                id=file_id,
+                output=f"{output_dir}{os.sep}",
+                quiet=False,
+                use_cookies=bool(attempt["use_cookies"]),
+            )
+            if result is None:
+                raise DriveDownloadError("gdown returned no downloaded file")
+            return
+        except Exception as exc:  # noqa: BLE001 - classify and retry download errors.
+            failure = classify_download_failure(exc)
+            if failure.code == "network_error":
+                last_error = DriveNetworkError(failure.message)
+            else:
+                last_error = DriveDownloadError(failure.message)
+
+    assert last_error is not None
+    raise last_error
+
+
 def copy_images(download_dir: Path, order_dir: Path) -> list[CopiedFile]:
     order_dir.mkdir(parents=True, exist_ok=True)
     copied: list[CopiedFile] = []
@@ -210,20 +278,23 @@ def download_design_images(url: str, order_dir: Path) -> list[CopiedFile]:
 
     with tempfile.TemporaryDirectory(prefix="order-drive-") as tmp:
         temp_dir = Path(tmp)
-        download_drive_folder(url, temp_dir)
+        download_drive_resource(url, temp_dir)
         return copy_images(temp_dir, order_dir)
 
 
 def cached_drive_folder(url: str, cache_root: Path) -> Path:
-    folder_id = extract_drive_folder_id(url)
-    cache_dir = cache_root / folder_id
+    resource = parse_drive_resource(url)
+    cache_dir = cache_root / f"{resource.kind}-{resource.resource_id}"
     if any(iter_image_files(cache_dir)):
         return cache_dir
 
     if cache_dir.exists():
         shutil.rmtree(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    download_drive_folder_by_id(folder_id, cache_dir)
+    if resource.kind == "folder":
+        download_drive_folder_by_id(resource.resource_id, cache_dir)
+    else:
+        download_drive_file_by_id(resource.resource_id, cache_dir)
     if not any(iter_image_files(cache_dir)):
-        raise DriveDownloadError("Google Drive folder downloaded, but no image files were found")
+        raise DriveDownloadError("Google Drive resource downloaded, but no image files were found")
     return cache_dir

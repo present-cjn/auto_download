@@ -6,11 +6,15 @@ import requests
 
 from app.core.downloader import (
     DriveDownloadError,
+    cached_drive_folder,
     classify_download_failure,
     copy_images,
+    download_drive_file_by_id,
+    extract_drive_file_id,
     extract_drive_folder_id,
     is_google_drive_url,
     next_available_path,
+    parse_drive_resource,
     safe_filename,
 )
 
@@ -21,6 +25,26 @@ def test_drive_url_detection_and_folder_id() -> None:
     assert is_google_drive_url(url)
     assert not is_google_drive_url("https://example.com/drive/folders/abc123")
     assert extract_drive_folder_id(url) == "abc123"
+
+
+def test_drive_resource_parses_folder_and_file_ids() -> None:
+    folder = parse_drive_resource("https://drive.google.com/drive/folders/folder123?usp=sharing")
+    file = parse_drive_resource("https://drive.google.com/file/d/file123/view?usp=sharing")
+
+    assert folder.kind == "folder"
+    assert folder.resource_id == "folder123"
+    assert file.kind == "file"
+    assert file.resource_id == "file123"
+    assert extract_drive_file_id("https://drive.google.com/file/d/file123/view") == "file123"
+
+
+def test_drive_resource_rejects_unknown_drive_shape() -> None:
+    try:
+        parse_drive_resource("https://drive.google.com/open?id=abc123")
+    except ValueError as exc:
+        assert "文件夹或文件 ID" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError")
 
 
 def test_filename_and_copy_images(tmp_path: Path) -> None:
@@ -38,6 +62,54 @@ def test_filename_and_copy_images(tmp_path: Path) -> None:
     assert next_available_path(target, "image.jpg").name == "image(2).jpg"
     assert [file.file_name for file in copied] == ["image(1).jpg"]
     assert (target / "image(1).jpg").read_bytes() == b"jpg"
+
+
+def test_download_drive_file_by_id_uses_output_directory(tmp_path: Path, monkeypatch) -> None:
+    calls = []
+
+    class FakeGdown:
+        @staticmethod
+        def download(id, output, quiet, use_cookies):
+            calls.append(
+                {
+                    "id": id,
+                    "output": output,
+                    "quiet": quiet,
+                    "use_cookies": use_cookies,
+                }
+            )
+            Path(output).mkdir(parents=True, exist_ok=True)
+            return str(Path(output) / "mockup.jpg")
+
+    monkeypatch.setattr("app.core.downloader.import_gdown", lambda: FakeGdown)
+
+    download_drive_file_by_id("file123", tmp_path)
+
+    assert calls == [
+        {
+            "id": "file123",
+            "output": f"{tmp_path}/",
+            "quiet": False,
+            "use_cookies": False,
+        }
+    ]
+
+
+def test_cached_drive_folder_uses_resource_kind_prefix(tmp_path: Path, monkeypatch) -> None:
+    def fake_download_file(file_id: str, output_dir: Path) -> None:
+        assert file_id == "file123"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "mockup.jpg").write_bytes(b"jpg")
+
+    monkeypatch.setattr("app.core.downloader.download_drive_file_by_id", fake_download_file)
+
+    cache_dir = cached_drive_folder(
+        "https://drive.google.com/file/d/file123/view?usp=sharing",
+        tmp_path,
+    )
+
+    assert cache_dir == tmp_path / "file-file123"
+    assert (cache_dir / "mockup.jpg").exists()
 
 
 def test_classify_download_failure() -> None:

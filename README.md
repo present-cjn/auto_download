@@ -72,7 +72,7 @@ data/archives/batch-<batch_id>.zip
 data/archives/batch-<batch_id>-order-<order_id>-<订单号>.zip
 ```
 
-同一个 Google Drive folder 在同一批次内只会下载到缓存一次，多个 SKU 复用同一链接时会从缓存复制到各自目录，减少重复请求 Google Drive。
+同一个 Google Drive 资源在同一批次内只会下载到缓存一次，多个 SKU 复用同一链接时会从缓存复制到各自目录，减少重复请求 Google Drive。链接支持 Drive 文件夹和 Drive 单文件图片。
 
 页面展示上，单 SKU 和多 SKU 都在同一张明细表里显示；同一个订单下的多条 SKU 会用同一组底色和左侧标识区分。订单 ZIP 会收集该订单关联的 SKU 文件夹。
 
@@ -135,7 +135,7 @@ python -m pytest
 
 Web 上传要求 Excel 只有一个可见工作表；工作表名称不限。若文件包含多个可见工作表，系统会拒绝解析并提示保留订单明细表后重新上传。CLI 仍可通过 `--sheet` 指定工作表。
 
-同一个订单号如果出现多个 SKU，数据库里会完整保留每一行 SKU 明细。订单号只在订单层去重，不会丢掉同一订单下的多个 SKU。图片下载目录按 SKU 创建，`Design Link` 和 `Mockup Link` 都会下载到对应 SKU 文件夹。
+同一个订单号如果出现多个 SKU，数据库里会完整保留每一行 SKU 明细。订单号只在订单层去重，不会丢掉同一订单下的多个 SKU。图片下载目录按 SKU 创建，`Design Link` 和 `Mockup Link` 都会下载到对应 SKU 文件夹；两者都支持 Drive 文件夹链接和 `/file/d/.../view` 单文件图片链接。
 
 代码兼容 `SKU`/`sku`、`Zip`/`Postcode`、`颜色`/`Color`。推荐正式模板使用 `SKU`、`Zip`、`颜色`。
 
