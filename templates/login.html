@@ -10,8 +10,10 @@
     <main class="auth-panel">
       <h1>订单设计图下载</h1>
       <form method="post" action="/login" class="stack">
-        <label for="password">访问密码</label>
-        <input id="password" name="password" type="password" autocomplete="current-password" autofocus>
+        <label for="username">用户名</label>
+        <input id="username" name="username" type="text" autocomplete="username" value="{{ username or '' }}" autofocus>
+        <label for="password">密码</label>
+        <input id="password" name="password" type="password" autocomplete="current-password">
         {% if error %}
         <p class="error">{{ error }}</p>
         {% endif %}

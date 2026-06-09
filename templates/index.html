@@ -22,6 +22,7 @@
         <th>链接</th>
         <th>成功</th>
         <th>失败</th>
+        {% if current_user.role == "admin" %}<th>上传人</th>{% endif %}
         <th>创建时间</th>
       </tr>
     </thead>
@@ -36,6 +37,7 @@
         <td>{{ batch.link_count }}</td>
         <td>{{ batch.success_count }}</td>
         <td>{{ batch.failed_count }}</td>
+        {% if current_user.role == "admin" %}<td>{{ batch.created_by_username or "历史批次" }}</td>{% endif %}
         <td>{{ batch.created_at }}</td>
       </tr>
       {% endfor %}

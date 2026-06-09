@@ -11,8 +11,12 @@
       <a class="brand" href="/">订单设计图下载</a>
       <nav class="nav">
         <a href="/">批次</a>
+        {% if current_user and current_user.role == "admin" %}
+        <a href="/users">用户</a>
+        {% endif %}
         <a class="button primary" href="/uploads/new">上传 Excel</a>
-        {% if password_enabled %}
+        {% if current_user %}
+        <span class="user-chip">{{ current_user.username }} · {{ current_user.role }}</span>
         <form method="post" action="/logout">
           <button class="button subtle" type="submit">退出</button>
         </form>

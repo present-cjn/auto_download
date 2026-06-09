@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create order folders and download Google Drive design images into them."""
+"""Create SKU folders and download Google Drive design/mockup images into them."""
 
 from __future__ import annotations
 
@@ -21,12 +21,21 @@ from app.core.excel_parser import (
 DEFAULT_EXCEL = "BT-6月1日订单总.xlsx"
 
 
-def grouped_items_by_order(items: list[OrderItemRow]) -> OrderedDict[str, list[OrderItemRow]]:
+def item_links(item: OrderItemRow) -> list[tuple[str, str]]:
+    links = []
+    if item.design_link:
+        links.append(("Design", item.design_link))
+    if item.mockup_link:
+        links.append(("Mockup", item.mockup_link))
+    return links
+
+
+def grouped_items_by_sku(items: list[OrderItemRow]) -> OrderedDict[str, list[OrderItemRow]]:
     grouped: OrderedDict[str, list[OrderItemRow]] = OrderedDict()
     for item in items:
-        if not item.design_link:
+        if not item_links(item):
             continue
-        grouped.setdefault(item.order_no, []).append(item)
+        grouped.setdefault(item.sku or f"row-{item.row_number}", []).append(item)
     return grouped
 
 
@@ -44,14 +53,14 @@ def limited_items(
 
 
 def print_dry_run(grouped: OrderedDict[str, list[OrderItemRow]]) -> None:
-    total_links = sum(len(items) for items in grouped.values())
-    print(f"Orders: {len(grouped)}")
-    print(f"Order item links: {total_links}")
-    for order_no, items in grouped.items():
-        print(f"{order_no}/")
+    total_links = sum(len(item_links(item)) for items in grouped.values() for item in items)
+    print(f"SKU folders: {len(grouped)}")
+    print(f"Download links: {total_links}")
+    for sku, items in grouped.items():
+        print(f"{safe_filename(sku)}/")
         for item in items:
-            sku_dir = safe_filename(item.sku or f"row-{item.row_number}")
-            print(f"  {sku_dir}/ row {item.row_number}: {item.design_link}")
+            for source_type, url in item_links(item):
+                print(f"  {source_type} row {item.row_number}: {url}")
 
 
 def download_orders(grouped: OrderedDict[str, list[OrderItemRow]], output_dir: Path) -> int:
@@ -60,45 +69,44 @@ def download_orders(grouped: OrderedDict[str, list[OrderItemRow]], output_dir: P
     failed: list[tuple[str, str, str]] = []
     copied_total = 0
 
-    for order_no, items in grouped.items():
-        order_dir = output_dir / order_no
-        order_dir.mkdir(parents=True, exist_ok=True)
-        print(f"\n== {order_no} ==")
+    for sku, items in grouped.items():
+        target_dir = output_dir / safe_filename(sku)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        print(f"\n== {sku} ==")
 
-        for index, item in enumerate(items, start=1):
-            if not is_google_drive_url(item.design_link):
-                failed.append((order_no, item.design_link, "not a Google Drive URL"))
-                print(f"skip non-drive URL: {item.design_link}")
+        links = [(item, source_type, url) for item in items for source_type, url in item_links(item)]
+        for index, (item, source_type, url) in enumerate(links, start=1):
+            if not is_google_drive_url(url):
+                failed.append((sku, url, "not a Google Drive URL"))
+                print(f"skip non-drive URL: {url}")
                 continue
 
-            sku_dir = safe_filename(item.sku or f"row-{item.row_number}")
-            target_dir = order_dir / sku_dir
-            print(f"[{index}/{len(items)}] downloading {sku_dir}: {item.design_link}")
+            print(f"[{index}/{len(links)}] downloading {source_type}: {url}")
             try:
-                copied = download_design_images(item.design_link, target_dir)
+                copied = download_design_images(url, target_dir)
                 copied_total += len(copied)
                 print(f"copied {len(copied)} image(s) into {target_dir}")
             except Exception as exc:  # noqa: BLE001 - keep batch downloads running.
-                failed.append((order_no, item.design_link, str(exc)))
+                failed.append((sku, url, str(exc)))
                 print(f"failed: {exc}", file=sys.stderr)
 
     print(f"\nDone. Copied {copied_total} image(s).")
     if failed:
         print(f"Failures: {len(failed)}", file=sys.stderr)
-        for order_no, url, reason in failed:
-            print(f"- {order_no}: {url} ({reason})", file=sys.stderr)
+        for sku, url, reason in failed:
+            print(f"- {sku}: {url} ({reason})", file=sys.stderr)
         return 1
     return 0
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Create folders from order numbers and download Design Link images."
+        description="Create SKU folders and download Design/Mockup Link images."
     )
     parser.add_argument("--excel", default=DEFAULT_EXCEL, help="Path to the Excel file.")
     parser.add_argument("--sheet", default=DEFAULT_SHEET, help="Worksheet name to read.")
     parser.add_argument(
-        "--output", default="orders", help="Directory where order folders are created."
+        "--output", default="orders", help="Directory where SKU folders are created."
     )
     parser.add_argument(
         "--dry-run",
@@ -118,8 +126,8 @@ def load_grouped_links(
     excel_path: Path, sheet_name: str, limit: Optional[int]
 ) -> tuple[int, int, OrderedDict[str, list[OrderItemRow]]]:
     items = parse_order_items(excel_path, sheet_name)
-    grouped = limited_items(grouped_items_by_order(items), limit)
-    return len(items), sum(len(rows) for rows in grouped.values()), grouped
+    grouped = limited_items(grouped_items_by_sku(items), limit)
+    return len(items), sum(len(item_links(item)) for rows in grouped.values() for item in rows), grouped
 
 
 def main() -> int:
@@ -139,7 +147,7 @@ def main() -> int:
     )
     print(
         f"Read {row_count} row(s), {item_link_count} order item link(s), "
-        f"{len(grouped)} order folder(s)."
+        f"{len(grouped)} SKU folder(s)."
     )
 
     if args.dry_run:

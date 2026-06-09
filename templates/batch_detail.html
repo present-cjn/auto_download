@@ -7,77 +7,105 @@
 </script>
 {% endif %}
 
-{% macro item_row(item, order_no=None) -%}
-<tr class="{% if item.download_status == 'failed' %}row-failed{% endif %}">
-  {% if order_no is not none %}<td class="order-cell">{{ order_no }}</td>{% endif %}
-  <td>{{ item.row_number }}</td>
-  <td class="sku-cell">{{ item.sku or "-" }}</td>
-  <td>{{ item.size or "-" }}</td>
-  <td>{{ item.color or "-" }}</td>
-  <td>{{ item.quantity }}</td>
-  <td>{{ item.tracking_no or "-" }}</td>
-  <td>
-    {% if item.design_link %}
-    <a class="link-action" href="{{ item.design_link }}" target="_blank" rel="noopener noreferrer">打开 Drive</a>
-    {% else %}
-    -
-    {% endif %}
-  </td>
-  <td><span class="status {{ item.download_status or 'missing' }}">{{ item.download_status or "no_link" }}</span></td>
-  <td>{{ item.download_image_count or 0 }}</td>
-  <td class="action-cell">
-    {% if item.download_status == 'failed' %}
-    <form method="post" action="/download-items/{{ item.download_item_id }}/retry">
-      <button class="button tiny" type="submit" {% if batch.status == "downloading" %}disabled{% endif %}>重试</button>
-    </form>
-    <div class="error-cell">{{ item.download_error or "下载失败，需要人工检查链接" }}</div>
-    {% elif item.download_status == 'downloaded' %}
-    <span class="muted">已完成</span>
-    {% elif item.download_status == 'downloading' %}
-    <span class="muted">下载中</span>
-    {% else %}
-    <span class="muted">待处理</span>
-    {% endif %}
-  </td>
-</tr>
+{% macro status_badge(status) -%}
+<span class="status {{ status or 'missing' }}">{{ status_labels.get(status or "pending", status or "等待") }}</span>
+{%- endmacro %}
+
+{% macro order_zip_button(row, extra_class="") -%}
+{% if row.order_archive_ready %}
+<a class="button tiny {{ extra_class }}" href="/batches/{{ batch.id }}/orders/{{ row.order.id }}/download.zip">订单 ZIP</a>
+{% else %}
+<span class="button tiny disabled {{ extra_class }}" aria-disabled="true">订单 ZIP</span>
+{% endif %}
+{%- endmacro %}
+
+{% macro item_actions(row, show_error=True) -%}
+{% set item = row.item %}
+<div class="inline-actions">
+  {% if item.download_status == 'failed' %}
+  <form method="post" action="/download-items/{{ item.download_item_id }}/retry">
+    <button class="button tiny" type="submit" {% if batch.status == "downloading" %}disabled{% endif %}>重试</button>
+  </form>
+  <form method="post" action="/download-items/{{ item.download_item_id }}/manual-done">
+    <button class="button tiny ghost" type="submit" {% if batch.status == "downloading" %}disabled{% endif %}>标记已处理</button>
+  </form>
+  {% elif item.download_status == 'downloaded' %}
+  <span class="muted">已完成</span>
+  {% elif item.download_status == 'manual_done' %}
+  <span class="muted">手动完成</span>
+  {% elif item.download_status == 'downloading' %}
+  <span class="muted">下载中</span>
+  {% else %}
+  <span class="muted">待处理</span>
+  {% endif %}
+</div>
+{% if show_error and item.download_status == 'failed' %}
+<div class="error-cell">{{ item.download_error or "下载失败，需要检查链接或手动下载" }}</div>
+{% endif %}
+{%- endmacro %}
+
+{% macro download_task_actions(task, show_error=True) -%}
+<div class="inline-actions">
+  {% if task.download_status == 'failed' %}
+  <form method="post" action="/download-items/{{ task.download_item_id }}/retry">
+    <button class="button tiny" type="submit" {% if batch.status == "downloading" %}disabled{% endif %}>重试</button>
+  </form>
+  <form method="post" action="/download-items/{{ task.download_item_id }}/manual-done">
+    <button class="button tiny ghost" type="submit" {% if batch.status == "downloading" %}disabled{% endif %}>标记已处理</button>
+  </form>
+  {% elif task.download_status == 'downloaded' %}
+  <span class="muted">已完成</span>
+  {% elif task.download_status == 'manual_done' %}
+  <span class="muted">手动完成</span>
+  {% elif task.download_status == 'downloading' %}
+  <span class="muted">下载中</span>
+  {% else %}
+  <span class="muted">待处理</span>
+  {% endif %}
+</div>
+{% if show_error and task.download_status == 'failed' %}
+<div class="error-cell">{{ task.download_error or "下载失败，需要检查链接或手动下载" }}</div>
+{% endif %}
 {%- endmacro %}
 
 <section class="page-header">
   <div>
     <h1>批次 #{{ batch.id }}</h1>
-    <p>{{ batch.file_name }} · <span class="status {{ batch.status }}">{{ batch.status }}</span></p>
+    <p>{{ batch.file_name }} · {{ status_badge(batch.status) }}</p>
   </div>
   <div class="actions">
     <form method="post" action="/batches/{{ batch.id }}/start-download">
-      <button class="button primary" type="submit" {% if batch.status == "downloading" or batch.link_count == batch.success_count %}disabled{% endif %}>开始/继续下载</button>
+      <button class="button primary" type="submit" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>开始/继续下载</button>
     </form>
     <form method="post" action="/batches/{{ batch.id }}/retry-failed">
       <button class="button subtle" type="submit" {% if batch.failed_count == 0 or batch.status == "downloading" %}disabled{% endif %}>重试失败项</button>
     </form>
-    <a class="button subtle" href="/batches/{{ batch.id }}/download.zip">下载 ZIP</a>
+    {% if batch_archive_ready %}
+    <a class="button subtle" href="/batches/{{ batch.id }}/download.zip">一键下载全部订单</a>
+    {% else %}
+    <span class="button subtle disabled" aria-disabled="true">一键下载全部订单</span>
+    {% endif %}
   </div>
-</section>
-
-<section class="workflow">
-  <div class="step done">已上传</div>
-  <div class="step {% if batch.status != 'pending' %}done{% endif %}">已解析</div>
-  <div class="step {% if batch.status in ['review_ready', 'downloading', 'completed', 'completed_with_errors'] %}active{% endif %}">人工核对</div>
-  <div class="step {% if batch.status == 'downloading' %}active{% elif batch.status in ['completed', 'completed_with_errors'] %}done{% endif %}">下载</div>
-  <div class="step {% if batch.status in ['completed', 'completed_with_errors'] %}done{% endif %}">完成</div>
 </section>
 
 <section class="metrics">
   <div><span>{{ batch.order_count }}</span><label>订单</label></div>
   <div><span>{{ batch.item_count }}</span><label>SKU 明细</label></div>
   <div><span>{{ batch.link_count }}</span><label>下载链接</label></div>
-  <div><span>{{ batch.success_count }}</span><label>成功</label></div>
+  <div><span>{{ batch.success_count }}</span><label>成功下载</label></div>
   <div><span>{{ batch.failed_count }}</span><label>失败</label></div>
 </section>
 
 <section class="progress-panel">
   <div class="progress-copy">
     <strong>下载进度</strong>
-    <span>{{ batch.success_count }} / {{ batch.link_count }}，失败 {{ batch.failed_count }}，等待 {{ status_counts.pending }}，处理中 {{ status_counts.downloading }}</span>
+    <span>
+      已处理 {{ handled_count }} / {{ batch.link_count }}，
+      成功 {{ batch.success_count }}，
+      失败 {{ batch.failed_count }}，
+      等待 {{ status_counts.pending }}，
+      处理中 {{ status_counts.downloading }}
+    </span>
   </div>
   <div class="progress-bar" aria-label="下载进度 {{ progress_percent }}%">
     <div style="width: {{ progress_percent }}%"></div>
@@ -86,7 +114,11 @@
 
 {% if batch.status == "review_ready" %}
 <section class="notice">
-  已解析完成。请先核对订单、SKU、数量、Design Link 和单号，确认无误后点击“开始/继续下载”。
+  已解析完成。确认订单、SKU、Design Link 和 Mockup Link 无误后，可以点击“开始/继续下载”。
+</section>
+{% elif batch.status == "needs_fix" %}
+<section class="notice error-block">
+  导入预检未通过。请修正必填字段或重复 SKU 后重新上传。
 </section>
 {% endif %}
 
@@ -94,11 +126,101 @@
 <section class="notice error-block">{{ batch.error_message }}</section>
 {% endif %}
 
-{% if single_item_orders %}
+{% if import_summary %}
+<section class="preflight-panel">
+  <div class="section-heading">
+    <h2>导入预检</h2>
+    <p>用于提前发现表格和链接风险；必填缺失或 SKU 重复会阻止下载。</p>
+  </div>
+  <div class="summary-grid">
+    <div><span>{{ import_summary.sheet_name or "-" }}</span><label>工作表</label></div>
+    <div><span>{{ import_summary.item_count }}</span><label>SKU 行</label></div>
+    <div><span>{{ import_summary.order_count }}</span><label>订单</label></div>
+    <div><span>{{ import_summary.design_link_count }}</span><label>Design Link</label></div>
+    <div><span>{{ import_summary.mockup_link_count or 0 }}</span><label>Mockup Link</label></div>
+    <div><span>{{ import_summary.empty_design_link_count }}</span><label>空链接</label></div>
+    <div><span>{{ import_summary.non_google_drive_link_count }}</span><label>非 Drive 链接</label></div>
+    <div><span>{{ import_summary.duplicate_design_link_count }}</span><label>重复链接</label></div>
+    <div><span>{{ import_summary.multi_sku_order_count }}</span><label>多 SKU 订单</label></div>
+    <div><span>{{ import_summary.duplicate_sku_count or 0 }}</span><label>重复 SKU</label></div>
+    <div><span>{{ import_summary.tracking_no_count }}</span><label>已有单号行</label></div>
+  </div>
+  {% if import_summary.warnings %}
+  <div class="warning-list">
+    {% for warning in import_summary.warnings %}
+    <span>{{ warning }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if import_summary.missing_required_fields %}
+  <div class="warning-list">
+    {% for field, rows in import_summary.missing_required_fields.items() %}
+    <span>{{ field }} 缺失：第 {{ rows|join(', ') }} 行</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if import_summary.duplicate_skus %}
+  <div class="warning-list">
+    {% for sku, rows in import_summary.duplicate_skus.items() %}
+    <span>SKU {{ sku }} 重复：第 {{ rows|join(', ') }} 行</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if failed_rows %}
 <section class="review-section">
   <div class="section-heading">
-    <h2>单 SKU 订单</h2>
-    <p>{{ single_item_orders|length }} 个订单可直接核对，不需要展开。</p>
+    <h2>失败项</h2>
+    <p>{{ failed_rows|length }} 条需要重试或手动处理。</p>
+  </div>
+  <div class="table-wrap compact">
+    <table class="failed-table">
+      <thead>
+        <tr>
+          <th>订单号</th>
+          <th>SKU</th>
+          <th>来源</th>
+          <th>链接</th>
+          <th>失败原因</th>
+          <th>处理</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in failed_rows %}
+        {% set item = row.item %}
+        {% set task = row.download_item %}
+        <tr>
+          <td class="order-cell">{{ row.order.order_no }}</td>
+          <td class="sku-cell">{{ item.sku or "-" }}</td>
+          <td>{{ "Mockup" if task.source_type == "mockup" else "Design" }}</td>
+          <td>
+            {% if task.design_link %}
+            <a class="link-action" href="{{ task.design_link }}" target="_blank" rel="noopener noreferrer">打开 Drive</a>
+            {% else %}
+            -
+            {% endif %}
+          </td>
+          <td class="error-cell">
+            {% if task.download_error_code %}
+            <span class="error-tag">{{ error_labels.get(task.download_error_code, "未知错误") }}</span>
+            {% endif %}
+            {{ task.download_error or "下载失败，需要检查链接或手动下载" }}
+          </td>
+          <td>{{ download_task_actions(task, False) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+<section class="review-section">
+  <div class="section-heading">
+    <h2>订单明细</h2>
+    <p>图片按 SKU 文件夹下载；同一订单下的多条 SKU 会用同一组底色和左侧标识展示。</p>
   </div>
   <div class="table-wrap compact">
     <table>
@@ -112,58 +234,58 @@
           <th>数量</th>
           <th>单号</th>
           <th>Design Link</th>
-          <th>下载状态</th>
+          <th>Mockup Link</th>
+          <th>状态</th>
           <th>图片</th>
+          <th>下载</th>
           <th>处理</th>
         </tr>
       </thead>
       <tbody>
-        {% for order in single_item_orders %}
-        {{ item_row(order["items"][0], order.order_no) }}
+        {% for row in display_rows %}
+        {% set item = row.item %}
+        <tr class="{% if row.is_multi_order %}multi-order-row group-{{ row.order_group_index }}{% endif %} {% if item.download_status == 'failed' %}row-failed{% endif %}">
+          <td class="order-cell">
+            <span>{{ row.order.order_no }}</span>
+            {% if row.is_multi_order %}
+            <small class="order-pill">多 SKU · {{ row.order_item_count }} 条</small>
+            {% endif %}
+          </td>
+          <td>{{ item.row_number }}</td>
+          <td class="sku-cell">{{ item.sku or "-" }}</td>
+          <td>{{ item.size or "-" }}</td>
+          <td>{{ item.color or "-" }}</td>
+          <td>{{ item.quantity }}</td>
+          <td>{{ item.tracking_no or "-" }}</td>
+          <td>
+            {% if item.design_link %}
+            <a class="link-action" href="{{ item.design_link }}" target="_blank" rel="noopener noreferrer">打开 Drive</a>
+            {% else %}
+            -
+            {% endif %}
+          </td>
+          <td>
+            {% if item.mockup_link %}
+            <a class="link-action" href="{{ item.mockup_link }}" target="_blank" rel="noopener noreferrer">打开 Drive</a>
+            {% else %}
+            -
+            {% endif %}
+          </td>
+          <td>{{ status_badge(item.download_status) }}</td>
+          <td>{{ item.download_image_count or 0 }}</td>
+          <td>{{ order_zip_button(row) }}</td>
+          <td class="action-cell">
+            {% for task in item.download_items %}
+            <div class="task-action-row">
+              <span class="muted">{{ "Mockup" if task.source_type == "mockup" else "Design" }}</span>
+              {{ download_task_actions(task) }}
+            </div>
+            {% endfor %}
+          </td>
+        </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </section>
-{% endif %}
-
-{% if multi_item_orders %}
-<section class="review-section order-list">
-  <div class="section-heading">
-    <h2>多 SKU 订单</h2>
-    <p>{{ multi_item_orders|length }} 个订单包含多条明细，按订单展开核对。</p>
-  </div>
-  {% for order in multi_item_orders %}
-  <details class="order-block" {% if loop.index <= 5 %}open{% endif %}>
-    <summary>
-      <span>{{ order.order_no }}</span>
-      <small>{{ order["items"]|length }} 条 SKU · {{ order.shipping_fullname or "无收件人" }} · {{ order.city or "-" }} {{ order.province or "" }}</small>
-    </summary>
-    <div class="table-wrap compact">
-      <table>
-        <thead>
-          <tr>
-            <th>行</th>
-            <th>SKU</th>
-            <th>尺码</th>
-            <th>颜色</th>
-            <th>数量</th>
-            <th>单号</th>
-            <th>Design Link</th>
-            <th>下载状态</th>
-            <th>图片</th>
-            <th>处理</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for item in order["items"] %}
-          {{ item_row(item) }}
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </details>
-  {% endfor %}
-</section>
-{% endif %}
 {% endblock %}

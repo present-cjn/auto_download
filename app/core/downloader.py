@@ -31,12 +31,28 @@ class CopiedFile:
     file_size: int
 
 
+@dataclass(frozen=True)
+class DownloadFailure:
+    code: str
+    message: str
+    detail: str
+
+
 class DriveDownloadError(RuntimeError):
     pass
 
 
 class DriveNetworkError(DriveDownloadError):
     pass
+
+
+ERROR_LABELS = {
+    "network_error": "网络连接失败",
+    "invalid_drive_url": "链接格式错误",
+    "drive_download_failed": "Drive 下载失败",
+    "no_images_found": "未找到图片",
+    "unknown_error": "未知错误",
+}
 
 
 def is_google_drive_url(url: str) -> bool:
@@ -47,12 +63,12 @@ def is_google_drive_url(url: str) -> bool:
 def extract_drive_folder_id(url: str) -> str:
     parsed = urlparse(url)
     if not is_google_drive_url(url):
-        raise ValueError("not a Google Drive URL")
+        raise ValueError("不是 Google Drive 链接")
 
     match = re.search(r"/drive/folders/([^/?#]+)", parsed.path)
     if match:
         return match.group(1)
-    raise ValueError("Google Drive folder id was not found in URL")
+    raise ValueError("Google Drive 链接中没有找到文件夹 ID")
 
 
 def safe_filename(name: str) -> str:
@@ -68,9 +84,9 @@ def next_available_path(directory: Path, filename: str) -> Path:
 
     stem = candidate.stem
     suffix = candidate.suffix
-    counter = 2
+    counter = 1
     while True:
-        candidate = directory / f"{stem}_{counter}{suffix}"
+        candidate = directory / f"{stem}({counter}){suffix}"
         if not candidate.exists():
             return candidate
         counter += 1
@@ -94,7 +110,7 @@ def import_gdown():
     return gdown
 
 
-def classify_download_error(exc: Exception) -> Exception:
+def classify_download_failure(exc: Exception) -> DownloadFailure:
     message = str(exc)
     network_types = (
         requests.exceptions.SSLError,
@@ -102,11 +118,34 @@ def classify_download_error(exc: Exception) -> Exception:
         requests.exceptions.Timeout,
     )
     if isinstance(exc, network_types) or "SSLEOFError" in message:
-        return DriveNetworkError(
-            "服务器连接 Google Drive 失败，可重试；多次失败请手动打开 Drive 下载。"
-            f" 原始错误: {message}"
+        return DownloadFailure(
+            code="network_error",
+            message="服务器连接 Google Drive 失败，可重试；多次失败请手动打开 Drive 下载。",
+            detail=message,
         )
-    return exc
+    if isinstance(exc, ValueError):
+        return DownloadFailure(
+            code="invalid_drive_url",
+            message=message or "Google Drive 链接格式不正确。",
+            detail=message,
+        )
+    if isinstance(exc, DriveDownloadError) and "no image files" in message:
+        return DownloadFailure(
+            code="no_images_found",
+            message="Google Drive 文件夹里没有找到可下载图片。",
+            detail=message,
+        )
+    if isinstance(exc, DriveDownloadError):
+        return DownloadFailure(
+            code="drive_download_failed",
+            message="Google Drive 下载失败，可重试；多次失败请手动打开 Drive 下载。",
+            detail=message,
+        )
+    return DownloadFailure(
+        code="unknown_error",
+        message="下载失败，需要检查链接或手动下载。",
+        detail=message,
+    )
 
 
 def download_drive_folder(url: str, temp_dir: Path) -> None:
@@ -139,7 +178,11 @@ def download_drive_folder_by_id(folder_id: str, output_dir: Path) -> None:
                 raise DriveDownloadError("gdown returned no downloaded files")
             return
         except Exception as exc:  # noqa: BLE001 - classify and retry download errors.
-            last_error = classify_download_error(exc)
+            failure = classify_download_failure(exc)
+            if failure.code == "network_error":
+                last_error = DriveNetworkError(failure.message)
+            else:
+                last_error = DriveDownloadError(failure.message)
 
     assert last_error is not None
     raise last_error

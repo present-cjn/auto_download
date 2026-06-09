@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}用户管理{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <h1>用户管理</h1>
+    <p>管理员可以创建业务员账号、启停账号和重置密码。</p>
+  </div>
+</section>
+
+{% if error %}
+<section class="notice error-block">{{ error }}</section>
+{% endif %}
+
+<section class="review-section">
+  <div class="section-heading">
+    <h2>创建用户</h2>
+  </div>
+  <form class="user-form" method="post" action="/users">
+    <label for="username">用户名</label>
+    <input id="username" name="username" type="text" autocomplete="username" required>
+    <label for="password">初始密码</label>
+    <input id="password" name="password" type="password" autocomplete="new-password" required>
+    <label for="role">角色</label>
+    <select id="role" name="role">
+      <option value="operator">业务员</option>
+      <option value="admin">管理员</option>
+    </select>
+    <button class="button primary" type="submit">创建</button>
+  </form>
+</section>
+
+<section class="review-section">
+  <div class="section-heading">
+    <h2>账号列表</h2>
+    <p>{{ users|length }} 个账号</p>
+  </div>
+  <div class="table-wrap compact">
+    <table>
+      <thead>
+        <tr>
+          <th>用户名</th>
+          <th>角色</th>
+          <th>状态</th>
+          <th>创建时间</th>
+          <th>重置密码</th>
+          <th>启停</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for user in users %}
+        <tr>
+          <td class="sku-cell">{{ user.username }}</td>
+          <td>{{ "管理员" if user.role == "admin" else "业务员" }}</td>
+          <td><span class="status {{ user.status }}">{{ "启用" if user.status == "active" else "停用" }}</span></td>
+          <td>{{ user.created_at }}</td>
+          <td>
+            <form class="inline-form" method="post" action="/users/{{ user.id }}/password">
+              <input name="password" type="password" autocomplete="new-password" placeholder="新密码" required>
+              <button class="button tiny" type="submit">重置</button>
+            </form>
+          </td>
+          <td>
+            {% if current_user.id == user.id %}
+            <span class="muted">当前账号</span>
+            {% elif user.status == "active" %}
+            <form method="post" action="/users/{{ user.id }}/status">
+              <input type="hidden" name="status" value="disabled">
+              <button class="button tiny ghost" type="submit">停用</button>
+            </form>
+            {% else %}
+            <form method="post" action="/users/{{ user.id }}/status">
+              <input type="hidden" name="status" value="active">
+              <button class="button tiny" type="submit">启用</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
