@@ -78,10 +78,13 @@
   </div>
   <div class="actions">
     <form method="post" action="/batches/{{ batch.id }}/start-download">
-      <button class="button primary" type="submit" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>开始/继续下载</button>
+      <button class="button primary" type="submit" name="limit" value="10" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>下载 10 项</button>
+      <button class="button subtle" type="submit" name="limit" value="20" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>下载 20 项</button>
+      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>继续全部</button>
     </form>
     <form method="post" action="/batches/{{ batch.id }}/retry-failed">
-      <button class="button subtle" type="submit" {% if batch.failed_count == 0 or batch.status == "downloading" %}disabled{% endif %}>重试失败项</button>
+      <button class="button subtle" type="submit" name="limit" value="10" {% if batch.failed_count == 0 or batch.status == "downloading" %}disabled{% endif %}>重试 10 个失败项</button>
+      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.failed_count == 0 or batch.status == "downloading" %}disabled{% endif %}>重试全部失败项</button>
     </form>
     {% if batch_archive_ready %}
     <a class="button subtle" href="/batches/{{ batch.id }}/download.zip">一键下载全部订单</a>
@@ -109,6 +112,12 @@
       等待 {{ status_counts.pending }}，
       处理中 {{ status_counts.downloading }}
     </span>
+    {% if current_task %}
+    <span>
+      当前下载：{{ current_task.sku }} · {{ "Mockup" if current_task.source_type == "mockup" else "Design" }}
+      {% if current_task.duration_label %}· {{ current_task.duration_label }}{% endif %}
+    </span>
+    {% endif %}
   </div>
   <div class="progress-bar" aria-label="下载进度 {{ progress_percent }}%">
     <div style="width: {{ progress_percent }}%"></div>

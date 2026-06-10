@@ -28,6 +28,10 @@ UPLOADS_DIR = DATA_DIR / "uploads"
 ORDERS_DIR = DATA_DIR / "orders"
 ARCHIVES_DIR = DATA_DIR / "archives"
 CACHE_DIR = DATA_DIR / "cache"
+RATE_LIMIT_PAUSE_THRESHOLD = 2
+RATE_LIMIT_PAUSE_MESSAGE = (
+    "疑似 Google Drive 限流，已自动暂停本轮下载。建议等待 30-60 分钟后分批继续。"
+)
 
 
 def configured_download_delay_seconds() -> int:
@@ -151,7 +155,7 @@ def create_order_archive(batch_id: int, order_id: int) -> Path:
     return archive_path
 
 
-def process_one_download_item(item: dict) -> None:
+def process_one_download_item(item: dict) -> str:
     download_item_id = int(item["id"])
     batch_id = int(item["batch_id"])
     source_type = item.get("source_type") or "design"
@@ -190,7 +194,7 @@ def process_one_download_item(item: dict) -> None:
                 f"[batch {batch_id}] downloaded {len(copied_files)} image(s) for {sku} ({source_type})",
                 flush=True,
             )
-            return
+            return "downloaded"
         except Exception as exc:  # noqa: BLE001 - keep the batch running.
             failure = classify_download_failure(exc)
             is_final_attempt = attempt_index >= len(backoffs)
@@ -216,22 +220,28 @@ def process_one_download_item(item: dict) -> None:
                 f"{failure.message} [{failure.code}] {failure.detail[:500]}",
                 flush=True,
             )
-            return
+            return failure.code
         finally:
             db.refresh_batch_counts(batch_id)
+    return "unknown_error"
 
 
-def finish_download_batch(batch_id: int) -> None:
+def finish_download_batch(batch_id: int, error_message: Optional[str] = None) -> None:
     create_archive(batch_id)
     db.refresh_batch_counts(batch_id)
     batch = db.get_batch(batch_id)
+    status_counts = db.get_batch_status_counts(batch_id)
     if batch and int(batch["failed_count"]) > 0:
-        db.update_batch_status(batch_id, "completed_with_errors")
+        db.update_batch_status(batch_id, "completed_with_errors", error_message)
+    elif int(status_counts["pending"]) > 0:
+        db.update_batch_status(batch_id, "review_ready", error_message)
     else:
-        db.update_batch_status(batch_id, "completed")
+        db.update_batch_status(batch_id, "completed", error_message)
 
 
-def process_download_items(batch_id: int, failed_only: bool = False) -> None:
+def process_download_items(
+    batch_id: int, failed_only: bool = False, limit: Optional[int] = None
+) -> None:
     ensure_batch_order_dir(batch_id)
     db.update_batch_status(batch_id, "downloading")
     items = (
@@ -239,11 +249,26 @@ def process_download_items(batch_id: int, failed_only: bool = False) -> None:
         if failed_only
         else db.get_pending_download_items(batch_id)
     )
+    if limit is not None and limit > 0:
+        items = items[:limit]
 
+    consecutive_rate_limits = 0
     for index, item in enumerate(items):
         if index > 0:
             sleep_between_download_items()
-        process_one_download_item(item)
+        result = process_one_download_item(item)
+        if result == "drive_rate_limited_or_permission":
+            consecutive_rate_limits += 1
+            if consecutive_rate_limits >= RATE_LIMIT_PAUSE_THRESHOLD:
+                print(
+                    f"[batch {batch_id}] paused after {consecutive_rate_limits} "
+                    "consecutive Drive rate-limit/permission failures",
+                    flush=True,
+                )
+                finish_download_batch(batch_id, RATE_LIMIT_PAUSE_MESSAGE)
+                return
+        else:
+            consecutive_rate_limits = 0
 
     finish_download_batch(batch_id)
 
@@ -272,6 +297,14 @@ def start_download(batch_id: int) -> None:
 
 def retry_failed(batch_id: int) -> None:
     process_download_items(batch_id, failed_only=True)
+
+
+def start_download_limited(batch_id: int, limit: Optional[int]) -> None:
+    process_download_items(batch_id, failed_only=False, limit=limit)
+
+
+def retry_failed_limited(batch_id: int, limit: Optional[int]) -> None:
+    process_download_items(batch_id, failed_only=True, limit=limit)
 
 
 def retry_download_item(download_item_id: int) -> None:

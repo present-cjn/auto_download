@@ -7,6 +7,7 @@ from app.core import database as db
 from app.core.excel_parser import OrderItemRow
 from app.core.downloader import DriveDownloadError, DriveDownloadTimeout
 from app.core.tasks import (
+    RATE_LIMIT_PAUSE_MESSAGE,
     configured_download_delay_seconds,
     configured_retry_backoff_seconds,
     create_order_archive,
@@ -290,5 +291,100 @@ def test_rate_limited_download_retries_and_succeeds(tmp_path: Path, monkeypatch)
         assert status_counts["failed"] == 0
         assert item == []
         assert (orders_dir / str(batch_id) / "SKU-A" / "image.jpg").exists()
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_download_items_limit_processes_only_selected_count(tmp_path: Path, monkeypatch) -> None:
+    database_path = tmp_path / "app.db"
+    orders_dir = tmp_path / "orders"
+    cache_dir = tmp_path / "cache"
+    original_path = db.DB_PATH
+    db.DB_PATH = database_path
+    monkeypatch.setattr("app.core.tasks.ORDERS_DIR", orders_dir)
+    monkeypatch.setattr("app.core.tasks.CACHE_DIR", cache_dir)
+    monkeypatch.setattr("app.core.tasks.sleep_between_download_items", lambda: None)
+
+    calls = []
+
+    def fake_cached_drive_folder(url: str, cache_root: Path) -> Path:
+        calls.append(url)
+        source = cache_root / str(len(calls))
+        source.mkdir(parents=True, exist_ok=True)
+        (source / "image.jpg").write_bytes(b"jpg")
+        return source
+
+    monkeypatch.setattr("app.core.tasks.cached_drive_folder", fake_cached_drive_folder)
+    try:
+        db.init_db(database_path)
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"))
+        db.insert_import_items(
+            batch_id,
+            [
+                order_item(row_number=2, sku="SKU-1", design_link="https://drive.google.com/drive/folders/1"),
+                order_item(order_no="ORD-2", row_number=3, sku="SKU-2", design_link="https://drive.google.com/drive/folders/2"),
+                order_item(order_no="ORD-3", row_number=4, sku="SKU-3", design_link="https://drive.google.com/drive/folders/3"),
+            ],
+        )
+
+        process_download_items(batch_id, limit=2)
+
+        batch = db.get_batch(batch_id)
+        status_counts = db.get_batch_status_counts(batch_id)
+        assert calls == [
+            "https://drive.google.com/drive/folders/1",
+            "https://drive.google.com/drive/folders/2",
+        ]
+        assert batch is not None
+        assert batch["status"] == "review_ready"
+        assert status_counts["downloaded"] == 2
+        assert status_counts["pending"] == 1
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_consecutive_rate_limits_pause_batch(tmp_path: Path, monkeypatch) -> None:
+    database_path = tmp_path / "app.db"
+    orders_dir = tmp_path / "orders"
+    cache_dir = tmp_path / "cache"
+    original_path = db.DB_PATH
+    db.DB_PATH = database_path
+    monkeypatch.setattr("app.core.tasks.ORDERS_DIR", orders_dir)
+    monkeypatch.setattr("app.core.tasks.CACHE_DIR", cache_dir)
+    monkeypatch.setattr("app.core.tasks.sleep_between_download_items", lambda: None)
+    monkeypatch.setattr("app.core.tasks.configured_retry_backoff_seconds", lambda: [])
+
+    calls = []
+
+    def fake_cached_drive_folder(url: str, cache_root: Path) -> Path:
+        calls.append(url)
+        raise DriveDownloadError("FileURLRetrievalError: Cannot retrieve the public link")
+
+    monkeypatch.setattr("app.core.tasks.cached_drive_folder", fake_cached_drive_folder)
+    try:
+        db.init_db(database_path)
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"))
+        db.insert_import_items(
+            batch_id,
+            [
+                order_item(row_number=2, sku="SKU-1", design_link="https://drive.google.com/drive/folders/1"),
+                order_item(order_no="ORD-2", row_number=3, sku="SKU-2", design_link="https://drive.google.com/drive/folders/2"),
+                order_item(order_no="ORD-3", row_number=4, sku="SKU-3", design_link="https://drive.google.com/drive/folders/3"),
+            ],
+        )
+
+        process_download_items(batch_id)
+
+        batch = db.get_batch(batch_id)
+        status_counts = db.get_batch_status_counts(batch_id)
+        assert calls == [
+            "https://drive.google.com/drive/folders/1",
+            "https://drive.google.com/drive/folders/2",
+        ]
+        assert batch is not None
+        assert batch["status"] == "completed_with_errors"
+        assert batch["error_message"] == RATE_LIMIT_PAUSE_MESSAGE
+        assert status_counts["failed"] == 2
+        assert status_counts["pending"] == 1
     finally:
         db.DB_PATH = original_path

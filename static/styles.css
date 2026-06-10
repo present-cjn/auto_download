@@ -67,6 +67,8 @@ select {
 
 .nav form,
 .actions form {
+  display: inline-flex;
+  gap: 8px;
   margin: 0;
 }
 

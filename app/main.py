@@ -31,8 +31,10 @@ from app.core.tasks import (
     process_batch,
     retry_download_item,
     retry_failed,
+    retry_failed_limited,
     save_upload,
     start_download,
+    start_download_limited,
     start_background,
 )
 
@@ -102,6 +104,10 @@ def sort_rows_by_excel_row(rows: list[dict]) -> list[dict]:
     return sorted(rows, key=lambda row: int(row["item"].get("row_number") or 0))
 
 
+def normalized_limit(limit: int) -> Optional[int]:
+    return limit if limit > 0 else None
+
+
 def parse_db_timestamp(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
@@ -141,6 +147,18 @@ def enrich_order_download_durations(orders: list[dict]) -> None:
         for item in order["items"]:
             for task in item.get("download_items", []):
                 enrich_download_task_duration(task, now)
+
+
+def current_download_task(display_rows: list[dict]) -> Optional[dict]:
+    for row in display_rows:
+        for task in row["item"].get("download_items", []):
+            if task.get("download_status") == "downloading":
+                return {
+                    "sku": row["item"].get("sku") or "-",
+                    "source_type": task.get("source_type") or "design",
+                    "duration_label": task.get("download_duration_label"),
+                }
+    return None
 
 
 @app.on_event("startup")
@@ -337,6 +355,7 @@ def batch_detail(request: Request, batch_id: int):
                         failed_rows.append({**row, "download_item": download_item})
     display_rows = sort_rows_by_excel_row(display_rows)
     failed_rows = sort_rows_by_excel_row(failed_rows)
+    current_task = current_download_task(display_rows)
     status_counts = db.get_batch_status_counts(batch_id)
     handled_count = int(batch["success_count"]) + int(status_counts["manual_done"])
     progress_percent = 0
@@ -377,6 +396,7 @@ def batch_detail(request: Request, batch_id: int):
             batch=batch,
             display_rows=display_rows,
             failed_rows=failed_rows,
+            current_task=current_task,
             status_counts=status_counts,
             status_labels=status_labels,
             handled_count=handled_count,
@@ -396,20 +416,28 @@ def batch_status(request: Request, batch_id: int):
 
 
 @app.post("/batches/{batch_id}/start-download")
-def start_batch_download(request: Request, batch_id: int):
+def start_batch_download(request: Request, batch_id: int, limit: int = Form(0)):
     user = require_user(request)
     batch = require_batch_access(batch_id, user)
     if batch["status"] == "needs_fix":
         raise HTTPException(status_code=400, detail="导入预检未通过，请先修正表格后重新上传。")
-    start_background(start_download, batch_id)
+    selected_limit = normalized_limit(limit)
+    if selected_limit:
+        start_background(start_download_limited, batch_id, selected_limit)
+    else:
+        start_background(start_download, batch_id)
     return RedirectResponse(f"/batches/{batch_id}", status_code=303)
 
 
 @app.post("/batches/{batch_id}/retry-failed")
-def retry_failed_items(request: Request, batch_id: int):
+def retry_failed_items(request: Request, batch_id: int, limit: int = Form(0)):
     user = require_user(request)
     require_batch_access(batch_id, user)
-    start_background(retry_failed, batch_id)
+    selected_limit = normalized_limit(limit)
+    if selected_limit:
+        start_background(retry_failed_limited, batch_id, selected_limit)
+    else:
+        start_background(retry_failed, batch_id)
     return RedirectResponse(f"/batches/{batch_id}", status_code=303)
 
 
