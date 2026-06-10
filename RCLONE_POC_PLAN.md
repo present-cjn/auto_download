@@ -2,7 +2,9 @@
 
 ## 测试目标
 
-验证 rclone 是否能比 gdown 更稳定地下载 Google Drive 图片资源。当前阶段只在本地测试，不改 Web 系统、不部署服务器、不提交 token 或测试文件。
+验证 rclone 是否能比 gdown 更稳定地下载 Google Drive 图片资源。当前阶段只做命令行 PoC，不改 Web 系统、不提交 token 或测试文件。
+
+当前服务器已完成 `gdrive` remote 授权，服务器配置过程记录在 `RCLONE_SERVER_SETUP.md`。后续可以优先在服务器执行本 PoC，因为最终下载服务也会部署在服务器上。
 
 ## 测试范围
 
@@ -21,9 +23,10 @@
 rclone version
 rclone listremotes
 rclone lsd gdrive:
+rclone about gdrive:
 ```
 
-创建本地测试目录：
+创建测试目录：
 
 ```bash
 mkdir -p rclone-test rclone-results
