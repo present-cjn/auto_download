@@ -5,6 +5,11 @@ orders/
 data/
 *.log
 *.tmp
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+.~lock.*#
 download_report*.csv
 failed*.csv
 *.pyc
