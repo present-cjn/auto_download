@@ -13,3 +13,7 @@ data/
 download_report*.csv
 failed*.csv
 *.pyc
+rclone-test/
+rclone-results/
+.rclone-test/
+rclone.conf
