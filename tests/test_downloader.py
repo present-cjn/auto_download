@@ -98,6 +98,72 @@ def test_download_drive_file_by_id_uses_output_directory(tmp_path: Path, monkeyp
     ]
 
 
+def test_download_drive_file_by_id_falls_back_to_uc_url(tmp_path: Path, monkeypatch) -> None:
+    calls = []
+
+    class FakeGdown:
+        @staticmethod
+        def download(id=None, url=None, output="", quiet=False, use_cookies=False):
+            calls.append(
+                {
+                    "id": id,
+                    "url": url,
+                    "output": output,
+                    "quiet": quiet,
+                    "use_cookies": use_cookies,
+                }
+            )
+            if id:
+                raise RuntimeError("id mode failed")
+            Path(output).mkdir(parents=True, exist_ok=True)
+            return str(Path(output) / "mockup.jpg")
+
+    monkeypatch.setattr("app.core.downloader.import_gdown", lambda: FakeGdown)
+
+    download_drive_file_by_id("file123", tmp_path)
+
+    assert calls == [
+        {
+            "id": "file123",
+            "url": None,
+            "output": f"{tmp_path}/",
+            "quiet": False,
+            "use_cookies": False,
+        },
+        {
+            "id": None,
+            "url": "https://drive.google.com/uc?id=file123",
+            "output": f"{tmp_path}/",
+            "quiet": False,
+            "use_cookies": False,
+        },
+    ]
+
+
+def test_download_drive_file_by_id_reports_attempt_details(tmp_path: Path, monkeypatch) -> None:
+    class FakeGdown:
+        @staticmethod
+        def download(id=None, url=None, output="", quiet=False, use_cookies=False):
+            Path(output).mkdir(parents=True, exist_ok=True)
+            (Path(output) / "view?usp=sharing").write_text("not an image")
+            return None
+
+    monkeypatch.setattr("app.core.downloader.import_gdown", lambda: FakeGdown)
+    monkeypatch.setattr("app.core.downloader.time.sleep", lambda seconds: None)
+
+    try:
+        download_drive_file_by_id("file123", tmp_path)
+    except DriveDownloadError as exc:
+        message = str(exc)
+        assert "resource=file:file123" in message
+        assert "method=file_id" in message
+        assert "method=uc_url" in message
+        assert "gdown returned None" in message
+        assert "view?usp=sharing" in message
+    else:
+        raise AssertionError("Expected DriveDownloadError")
+
+
 def test_cached_drive_folder_uses_resource_kind_prefix(tmp_path: Path, monkeypatch) -> None:
     def fake_download_file(file_id: str, output_dir: Path) -> None:
         assert file_id == "file123"
@@ -113,6 +179,28 @@ def test_cached_drive_folder_uses_resource_kind_prefix(tmp_path: Path, monkeypat
 
     assert cache_dir == tmp_path / "file-file123"
     assert (cache_dir / "mockup.jpg").exists()
+
+
+def test_cached_drive_folder_reports_non_image_files(tmp_path: Path, monkeypatch) -> None:
+    def fake_download_file(file_id: str, output_dir: Path) -> None:
+        assert file_id == "file123"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "view?usp=sharing").write_text("not an image")
+
+    monkeypatch.setattr("app.core.downloader.download_drive_file_by_id", fake_download_file)
+
+    try:
+        cached_drive_folder(
+            "https://drive.google.com/file/d/file123/view?usp=sharing",
+            tmp_path,
+        )
+    except DriveDownloadError as exc:
+        message = str(exc)
+        assert "no image files were found" in message
+        assert "resource=file:file123" in message
+        assert "view?usp=sharing" in message
+    else:
+        raise AssertionError("Expected DriveDownloadError")
 
 
 def test_run_download_with_timeout_raises_timeout(tmp_path: Path) -> None:

@@ -133,6 +133,46 @@ def iter_image_files(directory: Path) -> Iterable[Path]:
             yield path
 
 
+def describe_directory_files(directory: Path, limit: int = 10) -> str:
+    if not directory.exists():
+        return "directory does not exist"
+    files = [str(path.relative_to(directory)) for path in sorted(directory.rglob("*")) if path.is_file()]
+    if not files:
+        return "no files"
+    sample = ", ".join(files[:limit])
+    if len(files) > limit:
+        sample = f"{sample}, ... ({len(files)} total)"
+    return sample
+
+
+def google_drive_uc_url(file_id: str) -> str:
+    return f"https://drive.google.com/uc?id={file_id}"
+
+
+def format_attempt_error(
+    *,
+    resource_kind: str,
+    resource_id: str,
+    attempt_number: int,
+    method: str,
+    use_cookies: bool,
+    exc: Exception,
+) -> str:
+    message = str(exc) or "<empty>"
+    return (
+        f"attempt={attempt_number} resource={resource_kind}:{resource_id} "
+        f"method={method} use_cookies={use_cookies} "
+        f"error={exc.__class__.__name__}: {message}"
+    )
+
+
+def raise_download_attempts_error(errors: list[str], network_failures: int) -> None:
+    detail = " | ".join(errors) if errors else "unknown gdown failure"
+    if network_failures and network_failures == len(errors):
+        raise DriveNetworkError(detail)
+    raise DriveDownloadError(detail)
+
+
 def import_gdown():
     try:
         import gdown  # type: ignore
@@ -264,10 +304,11 @@ def download_drive_folder_by_id(folder_id: str, output_dir: Path) -> None:
         {"use_cookies": False, "delay": 3},
         {"use_cookies": True, "delay": 10},
     ]
-    last_error: Optional[Exception] = None
+    errors: list[str] = []
+    network_failures = 0
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    for attempt in attempts:
+    for index, attempt in enumerate(attempts, start=1):
         if attempt["delay"]:
             time.sleep(int(attempt["delay"]))
         try:
@@ -279,17 +320,27 @@ def download_drive_folder_by_id(folder_id: str, output_dir: Path) -> None:
                 remaining_ok=True,
             )
             if result is None:
-                raise DriveDownloadError("gdown returned no downloaded files")
+                raise DriveDownloadError(
+                    "gdown returned None for folder "
+                    f"id={folder_id}; files={describe_directory_files(output_dir)}"
+                )
             return
         except Exception as exc:  # noqa: BLE001 - classify and retry download errors.
             failure = classify_download_failure(exc)
             if failure.code == "network_error":
-                last_error = DriveNetworkError(failure.message)
-            else:
-                last_error = DriveDownloadError(failure.message)
+                network_failures += 1
+            errors.append(
+                format_attempt_error(
+                    resource_kind="folder",
+                    resource_id=folder_id,
+                    attempt_number=index,
+                    method="folder_id",
+                    use_cookies=bool(attempt["use_cookies"]),
+                    exc=exc,
+                )
+            )
 
-    assert last_error is not None
-    raise last_error
+    raise_download_attempts_error(errors, network_failures)
 
 
 def download_drive_file_by_id(file_id: str, output_dir: Path) -> None:
@@ -299,31 +350,53 @@ def download_drive_file_by_id(file_id: str, output_dir: Path) -> None:
         {"use_cookies": False, "delay": 3},
         {"use_cookies": True, "delay": 10},
     ]
-    last_error: Optional[Exception] = None
+    errors: list[str] = []
+    network_failures = 0
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    for attempt in attempts:
+    for index, attempt in enumerate(attempts, start=1):
         if attempt["delay"]:
             time.sleep(int(attempt["delay"]))
-        try:
-            result = gdown.download(
-                id=file_id,
-                output=f"{output_dir}{os.sep}",
-                quiet=False,
-                use_cookies=bool(attempt["use_cookies"]),
-            )
-            if result is None:
-                raise DriveDownloadError("gdown returned no downloaded file")
-            return
-        except Exception as exc:  # noqa: BLE001 - classify and retry download errors.
-            failure = classify_download_failure(exc)
-            if failure.code == "network_error":
-                last_error = DriveNetworkError(failure.message)
-            else:
-                last_error = DriveDownloadError(failure.message)
+        use_cookies = bool(attempt["use_cookies"])
+        for method in ("file_id", "uc_url"):
+            try:
+                if method == "file_id":
+                    result = gdown.download(
+                        id=file_id,
+                        output=f"{output_dir}{os.sep}",
+                        quiet=False,
+                        use_cookies=use_cookies,
+                    )
+                else:
+                    result = gdown.download(
+                        url=google_drive_uc_url(file_id),
+                        output=f"{output_dir}{os.sep}",
+                        quiet=False,
+                        use_cookies=use_cookies,
+                    )
+                if result is None:
+                    raise DriveDownloadError(
+                        "gdown returned None for file "
+                        f"id={file_id} method={method}; "
+                        f"files={describe_directory_files(output_dir)}"
+                    )
+                return
+            except Exception as exc:  # noqa: BLE001 - classify and retry download errors.
+                failure = classify_download_failure(exc)
+                if failure.code == "network_error":
+                    network_failures += 1
+                errors.append(
+                    format_attempt_error(
+                        resource_kind="file",
+                        resource_id=file_id,
+                        attempt_number=index,
+                        method=method,
+                        use_cookies=use_cookies,
+                        exc=exc,
+                    )
+                )
 
-    assert last_error is not None
-    raise last_error
+    raise_download_attempts_error(errors, network_failures)
 
 
 def copy_images(download_dir: Path, order_dir: Path) -> list[CopiedFile]:
@@ -366,5 +439,9 @@ def cached_drive_folder(url: str, cache_root: Path) -> Path:
     else:
         run_download_with_timeout(download_drive_file_by_id, resource.resource_id, cache_dir)
     if not any(iter_image_files(cache_dir)):
-        raise DriveDownloadError("Google Drive resource downloaded, but no image files were found")
+        raise DriveDownloadError(
+            "Google Drive resource downloaded, but no image files were found; "
+            f"resource={resource.kind}:{resource.resource_id}; "
+            f"files={describe_directory_files(cache_dir)}"
+        )
     return cache_dir

@@ -542,6 +542,15 @@ select {
   padding: 3px 7px;
 }
 
+.diagnostic-detail {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  margin-top: 6px;
+  white-space: pre-wrap;
+}
+
 .failed-table {
   min-width: 760px;
 }

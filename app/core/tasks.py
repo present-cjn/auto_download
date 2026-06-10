@@ -154,7 +154,8 @@ def process_one_download_item(item: dict) -> None:
             error_detail=failure.detail,
         )
         print(
-            f"[batch {batch_id}] failed {source_type} for {sku}: {failure.message}",
+            f"[batch {batch_id}] failed {source_type} for {sku}: "
+            f"{failure.message} [{failure.code}] {failure.detail[:500]}",
             flush=True,
         )
     finally:

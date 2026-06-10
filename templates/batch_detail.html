@@ -207,6 +207,9 @@
             <span class="error-tag">{{ error_labels.get(task.download_error_code, "未知错误") }}</span>
             {% endif %}
             {{ task.download_error or "下载失败，需要检查链接或手动下载" }}
+            {% if task.download_error_detail %}
+            <div class="diagnostic-detail">{{ task.download_error_detail[:500] }}</div>
+            {% endif %}
           </td>
           <td>{{ download_task_actions(task, False) }}</td>
         </tr>
