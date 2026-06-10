@@ -91,8 +91,8 @@ def require_batch_access(batch_id: int, user: dict) -> dict:
     return batch
 
 
-def template_context(request: Request, user: dict, **extra):
-    context = {"request": request, "current_user": user}
+def template_context(user: dict, **extra):
+    context = {"current_user": user}
     context.update(extra)
     return context
 
@@ -119,7 +119,9 @@ def login_page(request: Request):
     if current_user(request):
         return RedirectResponse("/", status_code=303)
     return templates.TemplateResponse(
-        "login.html", {"request": request, "error": None, "username": ""}
+        request=request,
+        name="login.html",
+        context={"error": None, "username": ""},
     )
 
 
@@ -132,8 +134,9 @@ def login(request: Request, username: str = Form(""), password: str = Form("")):
         or not verify_password(password, user["password_hash"])
     ):
         return templates.TemplateResponse(
-            "login.html",
-            {"request": request, "error": "用户名或密码不正确", "username": username},
+            request=request,
+            name="login.html",
+            context={"error": "用户名或密码不正确", "username": username},
             status_code=401,
         )
     token = new_session_token()
@@ -157,19 +160,20 @@ def logout(request: Request):
 def index(request: Request):
     user = require_user(request)
     return templates.TemplateResponse(
-        "index.html",
-        template_context(
-            request,
-            user,
-            batches=db.list_batches_for_user(user),
-        ),
+        request=request,
+        name="index.html",
+        context=template_context(user, batches=db.list_batches_for_user(user)),
     )
 
 
 @app.get("/uploads/new")
 def upload_page(request: Request):
     user = require_user(request)
-    return templates.TemplateResponse("upload.html", template_context(request, user))
+    return templates.TemplateResponse(
+        request=request,
+        name="upload.html",
+        context=template_context(user),
+    )
 
 
 @app.post("/uploads")
@@ -192,8 +196,9 @@ def users_page(request: Request):
     user = require_user(request)
     require_admin(user)
     return templates.TemplateResponse(
-        "users.html",
-        template_context(request, user, users=db.list_users(), error=None),
+        request=request,
+        name="users.html",
+        context=template_context(user, users=db.list_users(), error=None),
     )
 
 
@@ -204,9 +209,9 @@ def create_user(request: Request, username: str = Form(""), password: str = Form
     username = username.strip()
     if not username or not password:
         return templates.TemplateResponse(
-            "users.html",
-            template_context(
-                request,
+            request=request,
+            name="users.html",
+            context=template_context(
                 user,
                 users=db.list_users(),
                 error="用户名和密码不能为空",
@@ -219,9 +224,9 @@ def create_user(request: Request, username: str = Form(""), password: str = Form
         db.create_user(username, hash_password(password), role=role)
     except sqlite3.IntegrityError:
         return templates.TemplateResponse(
-            "users.html",
-            template_context(
-                request,
+            request=request,
+            name="users.html",
+            context=template_context(
                 user,
                 users=db.list_users(),
                 error="用户名已存在",
@@ -322,9 +327,9 @@ def batch_detail(request: Request, batch_id: int):
         "manual_done": "手动完成",
     }
     return templates.TemplateResponse(
-        "batch_detail.html",
-        template_context(
-            request,
+        request=request,
+        name="batch_detail.html",
+        context=template_context(
             user,
             batch=batch,
             display_rows=display_rows,
