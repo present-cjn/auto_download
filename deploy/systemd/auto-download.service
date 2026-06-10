@@ -1,0 +1,19 @@
+[Unit]
+Description=Auto Download Web Tool
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=auto-download
+Group=auto-download
+WorkingDirectory=/opt/auto_download
+EnvironmentFile=/opt/auto_download/.env
+ExecStart=/opt/auto_download/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
