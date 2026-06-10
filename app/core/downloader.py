@@ -63,6 +63,7 @@ class DriveDownloadTimeout(DriveDownloadError):
 ERROR_LABELS = {
     "network_error": "网络连接失败",
     "invalid_drive_url": "链接格式错误",
+    "drive_rate_limited_or_permission": "Drive 限流或权限受限",
     "drive_download_failed": "Drive 下载失败",
     "download_timeout": "下载超时",
     "no_images_found": "未找到图片",
@@ -263,6 +264,16 @@ def classify_download_failure(exc: Exception) -> DownloadFailure:
         return DownloadFailure(
             code="download_timeout",
             message="Google Drive 下载超时，可重试；多次失败请手动打开 Drive 下载。",
+            detail=message,
+        )
+    if isinstance(exc, DriveDownloadError) and (
+        "FileURLRetrievalError" in message
+        or "Cannot retrieve the public link" in message
+        or "have had many accesses" in message
+    ):
+        return DownloadFailure(
+            code="drive_rate_limited_or_permission",
+            message="Google Drive 限流或权限不可公开下载，可稍后重试；多次失败请手动打开 Drive 下载。",
             detail=message,
         )
     if isinstance(exc, DriveDownloadError) and "no image files" in message:

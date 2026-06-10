@@ -5,8 +5,14 @@ from zipfile import ZipFile
 
 from app.core import database as db
 from app.core.excel_parser import OrderItemRow
-from app.core.downloader import DriveDownloadTimeout
-from app.core.tasks import create_order_archive, parse_batch, process_download_items
+from app.core.downloader import DriveDownloadError, DriveDownloadTimeout
+from app.core.tasks import (
+    configured_download_delay_seconds,
+    configured_retry_backoff_seconds,
+    create_order_archive,
+    parse_batch,
+    process_download_items,
+)
 
 
 def order_item(
@@ -176,6 +182,8 @@ def test_download_timeout_does_not_stop_following_items(tmp_path: Path, monkeypa
     db.DB_PATH = database_path
     monkeypatch.setattr("app.core.tasks.ORDERS_DIR", orders_dir)
     monkeypatch.setattr("app.core.tasks.CACHE_DIR", cache_dir)
+    monkeypatch.setattr("app.core.tasks.sleep_between_download_items", lambda: None)
+    monkeypatch.setattr("app.core.tasks.configured_retry_backoff_seconds", lambda: [])
 
     calls = []
 
@@ -222,5 +230,65 @@ def test_download_timeout_does_not_stop_following_items(tmp_path: Path, monkeypa
         assert status_counts["failed"] == 1
         assert status_counts["downloaded"] == 1
         assert (orders_dir / str(batch_id) / "SKU-OK" / "image.jpg").exists()
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_download_config_parsing(monkeypatch) -> None:
+    monkeypatch.setenv("DRIVE_DOWNLOAD_DELAY_SECONDS", "12")
+    monkeypatch.setenv("DRIVE_ITEM_RETRY_BACKOFF_SECONDS", "1, 2, bad, 0")
+
+    assert configured_download_delay_seconds() == 12
+    assert configured_retry_backoff_seconds() == [1, 2, 0]
+
+    monkeypatch.setenv("DRIVE_DOWNLOAD_DELAY_SECONDS", "bad")
+    monkeypatch.setenv("DRIVE_ITEM_RETRY_BACKOFF_SECONDS", "bad")
+
+    assert configured_download_delay_seconds() == 8
+    assert configured_retry_backoff_seconds() == [30, 90]
+
+
+def test_rate_limited_download_retries_and_succeeds(tmp_path: Path, monkeypatch) -> None:
+    database_path = tmp_path / "app.db"
+    orders_dir = tmp_path / "orders"
+    cache_dir = tmp_path / "cache"
+    original_path = db.DB_PATH
+    db.DB_PATH = database_path
+    monkeypatch.setattr("app.core.tasks.ORDERS_DIR", orders_dir)
+    monkeypatch.setattr("app.core.tasks.CACHE_DIR", cache_dir)
+    monkeypatch.setattr("app.core.tasks.configured_retry_backoff_seconds", lambda: [0, 0])
+
+    calls = []
+
+    def fake_cached_drive_folder(url: str, cache_root: Path) -> Path:
+        calls.append(url)
+        if len(calls) == 1:
+            raise DriveDownloadError("FileURLRetrievalError: Cannot retrieve the public link")
+        source = cache_root / "ok"
+        source.mkdir(parents=True, exist_ok=True)
+        (source / "image.jpg").write_bytes(b"jpg")
+        return source
+
+    monkeypatch.setattr("app.core.tasks.cached_drive_folder", fake_cached_drive_folder)
+    try:
+        db.init_db(database_path)
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"))
+        db.insert_import_items(batch_id, [order_item()])
+
+        process_download_items(batch_id)
+
+        batch = db.get_batch(batch_id)
+        status_counts = db.get_batch_status_counts(batch_id)
+        item = db.get_pending_download_items(batch_id)
+        assert calls == [
+            "https://drive.google.com/drive/folders/folder123",
+            "https://drive.google.com/drive/folders/folder123",
+        ]
+        assert batch is not None
+        assert batch["status"] == "completed"
+        assert status_counts["downloaded"] == 1
+        assert status_counts["failed"] == 0
+        assert item == []
+        assert (orders_dir / str(batch_id) / "SKU-A" / "image.jpg").exists()
     finally:
         db.DB_PATH = original_path

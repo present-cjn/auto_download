@@ -230,6 +230,9 @@ def test_classify_download_timeout() -> None:
 def test_classify_download_failure() -> None:
     network = classify_download_failure(requests.exceptions.SSLError("ssl broke"))
     invalid = classify_download_failure(ValueError("不是 Google Drive 链接"))
+    rate_limited = classify_download_failure(
+        DriveDownloadError("FileURLRetrievalError: Cannot retrieve the public link")
+    )
     empty = classify_download_failure(
         DriveDownloadError("Google Drive folder downloaded, but no image files were found")
     )
@@ -237,5 +240,6 @@ def test_classify_download_failure() -> None:
 
     assert network.code == "network_error"
     assert invalid.code == "invalid_drive_url"
+    assert rate_limited.code == "drive_rate_limited_or_permission"
     assert empty.code == "no_images_found"
     assert unknown.code == "unknown_error"

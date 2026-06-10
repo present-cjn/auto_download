@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -99,6 +100,47 @@ def template_context(user: dict, **extra):
 
 def sort_rows_by_excel_row(rows: list[dict]) -> list[dict]:
     return sorted(rows, key=lambda row: int(row["item"].get("row_number") or 0))
+
+
+def parse_db_timestamp(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def format_duration_seconds(seconds: int) -> str:
+    seconds = max(0, seconds)
+    minutes, remaining_seconds = divmod(seconds, 60)
+    hours, remaining_minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {remaining_minutes}m {remaining_seconds}s"
+    if minutes:
+        return f"{minutes}m {remaining_seconds}s"
+    return f"{remaining_seconds}s"
+
+
+def enrich_download_task_duration(task: dict, now: Optional[datetime] = None) -> None:
+    started_at = parse_db_timestamp(task.get("download_started_at"))
+    completed_at = parse_db_timestamp(task.get("download_completed_at"))
+    if not started_at:
+        task["download_duration_label"] = None
+        return
+    end_at = completed_at or now or datetime.utcnow()
+    prefix = "已用时" if task.get("download_status") == "downloading" else "耗时"
+    task["download_duration_label"] = (
+        f"{prefix} {format_duration_seconds(int((end_at - started_at).total_seconds()))}"
+    )
+
+
+def enrich_order_download_durations(orders: list[dict]) -> None:
+    now = datetime.utcnow()
+    for order in orders:
+        for item in order["items"]:
+            for task in item.get("download_items", []):
+                enrich_download_task_duration(task, now)
 
 
 @app.on_event("startup")
@@ -267,6 +309,7 @@ def batch_detail(request: Request, batch_id: int):
     user = require_user(request)
     batch = require_batch_access(batch_id, user)
     orders = db.get_batch_orders(batch_id)
+    enrich_order_download_durations(orders)
     display_rows = []
     failed_rows = []
     for group_index, order in enumerate(orders):

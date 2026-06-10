@@ -551,6 +551,12 @@ select {
   white-space: pre-wrap;
 }
 
+.task-meta {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .failed-table {
   min-width: 760px;
 }

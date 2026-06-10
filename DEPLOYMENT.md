@@ -84,9 +84,16 @@ sudo chmod 600 /opt/auto_download/.env
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=<强密码>
 DRIVE_DOWNLOAD_TIMEOUT_SECONDS=900
+DRIVE_DOWNLOAD_DELAY_SECONDS=8
+DRIVE_ITEM_RETRY_BACKOFF_SECONDS=30,90
 ```
 
 首次启动时，如果数据库里还没有账号，系统会用这里的管理员账号初始化。
+下载相关配置含义：
+
+- `DRIVE_DOWNLOAD_TIMEOUT_SECONDS`：单个 Drive 资源最长下载时间。
+- `DRIVE_DOWNLOAD_DELAY_SECONDS`：批量下载时，每个链接之间等待的秒数，用于降低 Google 风控概率。
+- `DRIVE_ITEM_RETRY_BACKOFF_SECONDS`：遇到网络、超时、Drive 限流或权限类错误时，单个链接额外重试前的等待秒数列表。
 
 ## 5. systemd 服务
 

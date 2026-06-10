@@ -899,7 +899,9 @@ def get_batch_orders(batch_id: int) -> list[dict[str, Any]]:
                         image_count AS download_image_count,
                         error_message AS download_error,
                         error_code AS download_error_code,
-                        error_detail AS download_error_detail
+                        error_detail AS download_error_detail,
+                        started_at AS download_started_at,
+                        completed_at AS download_completed_at
                     FROM download_items
                     WHERE order_item_id = ?
                     ORDER BY CASE source_type WHEN 'design' THEN 1 WHEN 'mockup' THEN 2 ELSE 3 END, id

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import shutil
 import threading
+import time
 import zipfile
 from pathlib import Path
 from typing import Optional
@@ -26,6 +28,41 @@ UPLOADS_DIR = DATA_DIR / "uploads"
 ORDERS_DIR = DATA_DIR / "orders"
 ARCHIVES_DIR = DATA_DIR / "archives"
 CACHE_DIR = DATA_DIR / "cache"
+
+
+def configured_download_delay_seconds() -> int:
+    raw_value = os.getenv("DRIVE_DOWNLOAD_DELAY_SECONDS", "8")
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return 8
+    return max(0, value)
+
+
+def configured_retry_backoff_seconds() -> list[int]:
+    raw_value = os.getenv("DRIVE_ITEM_RETRY_BACKOFF_SECONDS", "30,90")
+    values = []
+    for part in raw_value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            value = int(part)
+        except ValueError:
+            continue
+        if value >= 0:
+            values.append(value)
+    return values if values else [30, 90]
+
+
+def sleep_between_download_items() -> None:
+    delay = configured_download_delay_seconds()
+    if delay > 0:
+        time.sleep(delay)
+
+
+def should_retry_download_failure(error_code: str) -> bool:
+    return error_code in {"drive_rate_limited_or_permission", "network_error", "download_timeout"}
 
 
 def ensure_data_dirs() -> None:
@@ -119,47 +156,69 @@ def process_one_download_item(item: dict) -> None:
     batch_id = int(item["batch_id"])
     source_type = item.get("source_type") or "design"
     sku = item["item_sku"] or item["sku"] or f"row-{item['row_number']}"
-    db.clear_downloaded_files(download_item_id)
-    db.mark_download_started(download_item_id)
-    try:
-        print(
-            f"[batch {batch_id}] downloading {source_type} for {sku}: {item['design_link']}",
-            flush=True,
-        )
-        sku_dir = safe_filename(sku)
-        target_dir = ORDERS_DIR / str(batch_id) / sku_dir
-        source_dir = cached_drive_folder(item["design_link"], CACHE_DIR / str(batch_id))
-        copied_files = copy_images(source_dir, target_dir)
-        for copied in copied_files:
-            db.add_downloaded_file(
-                download_item_id=download_item_id,
-                batch_id=batch_id,
-                order_id=int(item["order_id"]),
-                order_no=item["order_no"],
-                file_name=copied.file_name,
-                local_path=copied.local_path,
-                file_size=copied.file_size,
+    backoffs = configured_retry_backoff_seconds()
+    max_attempts = 1 + len(backoffs)
+    for attempt_index in range(max_attempts):
+        if attempt_index > 0:
+            db.clear_downloaded_files(download_item_id)
+            db.mark_download_started(download_item_id)
+        elif item.get("status") != "downloading":
+            db.clear_downloaded_files(download_item_id)
+            db.mark_download_started(download_item_id)
+        try:
+            print(
+                f"[batch {batch_id}] downloading {source_type} for {sku}: {item['design_link']} "
+                f"(attempt {attempt_index + 1}/{max_attempts})",
+                flush=True,
             )
-        db.mark_download_success(download_item_id, len(copied_files))
-        print(
-            f"[batch {batch_id}] downloaded {len(copied_files)} image(s) for {sku} ({source_type})",
-            flush=True,
-        )
-    except Exception as exc:  # noqa: BLE001 - keep the batch running.
-        failure = classify_download_failure(exc)
-        db.mark_download_failed(
-            download_item_id,
-            failure.message,
-            error_code=failure.code,
-            error_detail=failure.detail,
-        )
-        print(
-            f"[batch {batch_id}] failed {source_type} for {sku}: "
-            f"{failure.message} [{failure.code}] {failure.detail[:500]}",
-            flush=True,
-        )
-    finally:
-        db.refresh_batch_counts(batch_id)
+            sku_dir = safe_filename(sku)
+            target_dir = ORDERS_DIR / str(batch_id) / sku_dir
+            source_dir = cached_drive_folder(item["design_link"], CACHE_DIR / str(batch_id))
+            copied_files = copy_images(source_dir, target_dir)
+            for copied in copied_files:
+                db.add_downloaded_file(
+                    download_item_id=download_item_id,
+                    batch_id=batch_id,
+                    order_id=int(item["order_id"]),
+                    order_no=item["order_no"],
+                    file_name=copied.file_name,
+                    local_path=copied.local_path,
+                    file_size=copied.file_size,
+                )
+            db.mark_download_success(download_item_id, len(copied_files))
+            print(
+                f"[batch {batch_id}] downloaded {len(copied_files)} image(s) for {sku} ({source_type})",
+                flush=True,
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 - keep the batch running.
+            failure = classify_download_failure(exc)
+            is_final_attempt = attempt_index >= len(backoffs)
+            if should_retry_download_failure(failure.code) and not is_final_attempt:
+                wait_seconds = backoffs[attempt_index]
+                print(
+                    f"[batch {batch_id}] retrying {source_type} for {sku} after "
+                    f"{wait_seconds}s due to {failure.code}: {failure.detail[:500]}",
+                    flush=True,
+                )
+                if wait_seconds > 0:
+                    time.sleep(wait_seconds)
+                continue
+
+            db.mark_download_failed(
+                download_item_id,
+                failure.message,
+                error_code=failure.code,
+                error_detail=failure.detail,
+            )
+            print(
+                f"[batch {batch_id}] failed {source_type} for {sku}: "
+                f"{failure.message} [{failure.code}] {failure.detail[:500]}",
+                flush=True,
+            )
+            return
+        finally:
+            db.refresh_batch_counts(batch_id)
 
 
 def finish_download_batch(batch_id: int) -> None:
@@ -181,7 +240,9 @@ def process_download_items(batch_id: int, failed_only: bool = False) -> None:
         else db.get_pending_download_items(batch_id)
     )
 
-    for item in items:
+    for index, item in enumerate(items):
+        if index > 0:
+            sleep_between_download_items()
         process_one_download_item(item)
 
     finish_download_batch(batch_id)

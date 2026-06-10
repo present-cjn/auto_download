@@ -62,6 +62,9 @@
   {% else %}
   <span class="muted">待处理</span>
   {% endif %}
+  {% if task.download_duration_label %}
+  <span class="task-meta">{{ task.download_duration_label }}</span>
+  {% endif %}
 </div>
 {% if show_error and task.download_status == 'failed' %}
 <div class="error-cell">{{ task.download_error or "下载失败，需要检查链接或手动下载" }}</div>
