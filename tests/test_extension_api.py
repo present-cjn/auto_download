@@ -133,12 +133,33 @@ def test_extension_success_and_failure_update_download_state(tmp_path: Path) -> 
                 "error_code": "extension_download_failed",
                 "error_message": "插件失败",
                 "error_detail": "Drive API 403",
+                "files": [
+                    {
+                        "file_name": "mockup-partial.jpg",
+                        "local_path": "auto-download/batch-1/SKU-A/mockup-partial.jpg",
+                        "file_size": 34,
+                    }
+                ],
+                "partial_image_count": 1,
             },
         )
         assert failed["ok"] is True
+        assert failed["partial_image_count"] == 1
         mockup = db.get_download_item(mockup_id)
         assert mockup["status"] == "failed"
         assert mockup["error_message"] == "插件失败"
+        assert mockup["image_count"] == 1
+        with db.connect() as conn:
+            files = conn.execute(
+                """
+                SELECT file_name, local_path, file_size
+                FROM downloaded_files
+                WHERE download_item_id = ?
+                """,
+                (mockup_id,),
+            ).fetchall()
+        assert len(files) == 1
+        assert files[0]["file_name"] == "mockup-partial.jpg"
         assert db.get_batch(batch_id)["status"] == "completed_with_errors"
         counts = db.get_batch_status_counts(batch_id)
         assert counts["downloaded"] == 1

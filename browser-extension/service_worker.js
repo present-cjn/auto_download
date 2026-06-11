@@ -1,6 +1,14 @@
 const SESSION_COOKIE = "app_session";
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const IMAGE_MIME_PREFIX = "image/";
+const DOWNLOAD_RETRY_DELAYS_MS = [3000, 8000, 15000];
+const RETRIABLE_DOWNLOAD_ERRORS = new Set([
+  "NETWORK_FAILED",
+  "NETWORK_TIMEOUT",
+  "SERVER_FAILED",
+  "SERVER_UNREACHABLE",
+  "TIMEOUT"
+]);
 let activeDownloadResolvers = new Map();
 let workerRunning = false;
 let paused = false;
@@ -22,6 +30,47 @@ function sanitizePathPart(value, fallback) {
 
 function joinDownloadPath(folder, filename) {
   return `${folder}/${sanitizePathPart(filename, "downloaded-image")}`;
+}
+
+function errorMessage(error) {
+  return String(error && error.message ? error.message : error || "unknown error");
+}
+
+function isRetriableDownloadError(error) {
+  const message = errorMessage(error);
+  if (RETRIABLE_DOWNLOAD_ERRORS.has(message)) {
+    return true;
+  }
+  return Array.from(RETRIABLE_DOWNLOAD_ERRORS).some((token) => message.includes(token));
+}
+
+function fileLabel(file) {
+  return file.name || file.id || "drive-file";
+}
+
+function buildDownloadFailureDetail(task, file, filename, attempt, maxAttempts, error) {
+  return [
+    `sku=${task.sku}`,
+    `source_type=${task.source_type}`,
+    `download_item_id=${task.download_item_id}`,
+    `drive_file_id=${file.id || ""}`,
+    `drive_file_name=${file.name || ""}`,
+    `target_path=${filename}`,
+    `attempt=${attempt}/${maxAttempts}`,
+    `chrome_error=${errorMessage(error)}`
+  ].join(" ");
+}
+
+function enrichDownloadError(error, task, file, filename, attempt, maxAttempts) {
+  const detail = buildDownloadFailureDetail(task, file, filename, attempt, maxAttempts, error);
+  const enriched = new Error(detail);
+  enriched.chromeError = errorMessage(error);
+  enriched.driveFileId = file.id || "";
+  enriched.driveFileName = file.name || "";
+  enriched.targetPath = filename;
+  enriched.attempt = attempt;
+  enriched.maxAttempts = maxAttempts;
+  return enriched;
 }
 
 async function setStatus(patch) {
@@ -178,17 +227,51 @@ async function startBrowserDownload(options) {
   return downloads[0] || { id: downloadId };
 }
 
+async function downloadWithRetry({ task, file, filename, downloadOptions }) {
+  const maxAttempts = DOWNLOAD_RETRY_DELAYS_MS.length + 1;
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const label = fileLabel(file);
+    await setStatus({
+      state: "下载中",
+      message: `${task.sku} · ${task.source_type} · ${label} (${attempt}/${maxAttempts})`
+    });
+    try {
+      const downloadItem = await startBrowserDownload(downloadOptions);
+      assertImageDownload(downloadItem, label);
+      return downloadItem;
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts && isRetriableDownloadError(error)) {
+        const waitMs = DOWNLOAD_RETRY_DELAYS_MS[attempt - 1];
+        await setStatus({
+          state: "重试中",
+          message: `${task.sku} · ${label} 下载中断：${errorMessage(error)}，${Math.round(waitMs / 1000)} 秒后重试`
+        });
+        await sleep(waitMs);
+        continue;
+      }
+      throw enrichDownloadError(error, task, file, filename, attempt, maxAttempts);
+    }
+  }
+  throw enrichDownloadError(lastError, task, file, filename, maxAttempts, maxAttempts);
+}
+
 async function downloadDriveFileByApi(file, task, token) {
   const filename = joinDownloadPath(
     task.sku_folder,
     `${task.filename_prefix}${file.name || `${file.id}.jpg`}`
   );
-  const downloadItem = await startBrowserDownload({
-    url: `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`,
+  const downloadItem = await downloadWithRetry({
+    task,
+    file,
     filename,
-    headers: [{ name: "Authorization", value: `Bearer ${token}` }]
+    downloadOptions: {
+      url: `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`,
+      filename,
+      headers: [{ name: "Authorization", value: `Bearer ${token}` }]
+    }
   });
-  assertImageDownload(downloadItem, file.name || file.id);
   return {
     file_name: filename.split("/").pop(),
     local_path: filename,
@@ -208,8 +291,12 @@ async function downloadSingleFile(task, token) {
   const fallbackName = `${task.filename_prefix}drive-file`;
   const filename = joinDownloadPath(task.sku_folder, fallbackName);
   const url = task.resource_id ? googleDriveDownloadUrl(task.resource_id) : task.url;
-  const downloadItem = await startBrowserDownload({ url, filename });
-  assertImageDownload(downloadItem, fallbackName);
+  const downloadItem = await downloadWithRetry({
+    task,
+    file: { id: task.resource_id || "", name: fallbackName },
+    filename,
+    downloadOptions: { url, filename }
+  });
   return [{
     file_name: fallbackName,
     local_path: filename,
@@ -226,11 +313,23 @@ async function downloadFolder(task, token) {
     throw new Error("Drive 文件夹中没有找到图片文件。 ");
   }
   const downloaded = [];
-  for (const file of files) {
+  for (const [index, file] of files.entries()) {
     if (paused) {
       throw new Error("用户暂停下载。 ");
     }
-    downloaded.push(await downloadDriveFileByApi(file, task, token));
+    try {
+      downloaded.push(await downloadDriveFileByApi(file, task, token));
+    } catch (error) {
+      const detail = [
+        errorMessage(error),
+        `folder_file_index=${index + 1}/${files.length}`,
+        `partial_image_count=${downloaded.length}`
+      ].join(" ");
+      const folderError = new Error(detail);
+      folderError.partialFiles = downloaded;
+      folderError.partialImageCount = downloaded.length;
+      throw folderError;
+    }
     await sleep(randomDelayMs());
   }
   return downloaded;
@@ -262,12 +361,16 @@ async function processTask(baseUrl, task) {
     const state = await chrome.storage.local.get({ done: 0 });
     await setStatus({ done: Number(state.done || 0) + 1, message: `完成 ${task.sku}` });
   } catch (error) {
+    const partialFiles = Array.isArray(error.partialFiles) ? error.partialFiles : [];
+    const partialImageCount = Number(error.partialImageCount || partialFiles.length || 0);
     await apiFetch(baseUrl, `/api/extension/download-items/${task.download_item_id}/failure`, {
       method: "POST",
       body: JSON.stringify({
         error_code: "extension_download_failed",
         error_message: "浏览器插件下载失败。",
-        error_detail: String(error && error.message ? error.message : error)
+        error_detail: errorMessage(error),
+        files: partialFiles,
+        partial_image_count: partialImageCount
       })
     });
     const state = await chrome.storage.local.get({ failed: 0 });

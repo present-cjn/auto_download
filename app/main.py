@@ -529,17 +529,31 @@ def extension_download_item_failure(
         raise HTTPException(status_code=404, detail="Download item not found")
     require_batch_access(int(item["batch_id"]), user)
     data = request_json_dict(body)
+    files = data.get("files") if isinstance(data.get("files"), list) else []
+    partial_image_count = data.get("partial_image_count")
+    try:
+        partial_image_count = int(partial_image_count)
+    except (TypeError, ValueError):
+        partial_image_count = len(files)
+    partial_image_count = max(0, partial_image_count)
     error_code = str(data.get("error_code") or "extension_download_failed")
     error_message = str(data.get("error_message") or "浏览器插件下载失败。")
     error_detail = str(data.get("error_detail") or "")
+    if files:
+        db.replace_downloaded_files_for_item(download_item_id, files)
     db.mark_download_failed(
         download_item_id,
         error_message,
         error_code=error_code,
         error_detail=error_detail,
+        image_count=partial_image_count,
     )
     refresh_batch_status_after_extension_update(int(item["batch_id"]))
-    return {"ok": True, "download_item_id": download_item_id}
+    return {
+        "ok": True,
+        "download_item_id": download_item_id,
+        "partial_image_count": partial_image_count,
+    }
 
 
 @app.post("/batches/{batch_id}/start-download")

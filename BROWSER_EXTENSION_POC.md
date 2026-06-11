@@ -84,6 +84,8 @@ A different unpacked extension ID requires a different Chrome Extension OAuth cl
 - The extension processes pending and failed download items, but a single run will not retry the same failed item repeatedly.
 - Drive folder links are listed via Drive API and downloaded image by image.
 - Drive file links are downloaded via Drive API when OAuth is available, with a fallback download URL for public files.
+- Individual browser downloads retry transient Chrome errors such as `NETWORK_FAILED` before the item is marked failed.
+- If a folder partially succeeds and then fails, the Web app stores the partial file list and the failed item remains retryable.
 - Downloaded file names keep the source type and `download_items.id` prefix to avoid collisions and support debugging.
 
 ## Known Limits
@@ -92,7 +94,7 @@ A different unpacked extension ID requires a different Chrome Extension OAuth cl
 - The Web app records browser-reported paths and counts; it does not verify files on the user's laptop.
 - Existing server-side download buttons and `gdown` logic are still present as backup actions.
 - There is no extension auto-update or managed OAuth configuration yet.
-- Failed/partial local downloads should be validated during formal feature development.
+- Chrome may leave an orphaned file in the root Downloads directory after an interrupted download; official output is the SKU folder path reported by the extension.
 
 ## Validation
 

@@ -1048,7 +1048,7 @@ def mark_download_started(download_item_id: int) -> None:
             """
             UPDATE download_items
             SET status = 'downloading', error_message = NULL,
-                error_code = NULL, error_detail = NULL,
+                error_code = NULL, error_detail = NULL, image_count = 0,
                 started_at = CURRENT_TIMESTAMP, completed_at = NULL
             WHERE id = ?
             """,
@@ -1075,13 +1075,14 @@ def mark_download_failed(
     error_message: str,
     error_code: Optional[str] = None,
     error_detail: Optional[str] = None,
+    image_count: Optional[int] = None,
 ) -> None:
     with connect() as conn:
         conn.execute(
             """
             UPDATE download_items
             SET status = 'failed', error_message = ?,
-                error_code = ?, error_detail = ?,
+                error_code = ?, error_detail = ?, image_count = COALESCE(?, image_count),
                 completed_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
@@ -1089,6 +1090,7 @@ def mark_download_failed(
                 error_message[:1000],
                 error_code,
                 error_detail[:4000] if error_detail else None,
+                image_count,
                 download_item_id,
             ),
         )

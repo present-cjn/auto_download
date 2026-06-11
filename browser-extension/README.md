@@ -31,6 +31,21 @@ auto-download/batch-<batch_id>/<sku>/<source_type>-<download_item_id>-<original_
 
 Design and mockup images are intentionally saved into the same SKU folder.
 
+## Download failures
+
+Chrome may report transient download interruptions such as `NETWORK_FAILED`.
+The extension retries each individual file up to 4 total attempts with short
+delays before marking the download item as failed.
+
+If a folder partially downloads and then fails, the Web app records the files
+that were already saved and keeps the item in failed state so it can be retried.
+The failure detail includes the SKU, source type, Drive file ID, Drive file name,
+target path, attempt count, and Chrome download error.
+
+If Chrome leaves an orphaned Drive-ID file directly in Downloads after an
+interrupted download, ignore or delete that orphan. The official output is only
+the file saved under `auto-download/batch-<batch_id>/<sku>/`.
+
 ## Web permissions
 
 The first internal version uses broad `http://*/*` and `https://*/*` host permissions so the same unpacked extension can connect to the deployment domain and local test URLs. Narrow these permissions to the production domain before wider distribution.
