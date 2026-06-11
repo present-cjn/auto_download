@@ -5,15 +5,15 @@ import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.core import database as db
-from app.core.downloader import ERROR_LABELS
+from app.core.downloader import ERROR_LABELS, parse_drive_resource, safe_filename
 from app.core.excel_parser import build_import_summary
 from app.core.security import (
     hash_password,
@@ -61,7 +61,7 @@ def ensure_initial_admin() -> None:
 
 
 def current_user(request: Request) -> Optional[dict]:
-    token = request.cookies.get(SESSION_COOKIE)
+    token = request.cookies.get(SESSION_COOKIE) or request.headers.get("x-app-session")
     if not token:
         return None
     return db.get_user_by_session(token, utc_now_string())
@@ -159,6 +159,52 @@ def current_download_task(display_rows: list[dict]) -> Optional[dict]:
                     "duration_label": task.get("download_duration_label"),
                 }
     return None
+
+
+def refresh_batch_status_after_extension_update(batch_id: int) -> None:
+    db.refresh_batch_counts(batch_id)
+    counts = db.get_batch_status_counts(batch_id)
+    if counts["downloading"] > 0:
+        db.update_batch_status(batch_id, "downloading")
+    elif counts["failed"] > 0:
+        db.update_batch_status(batch_id, "completed_with_errors")
+    elif counts["pending"] > 0:
+        db.update_batch_status(batch_id, "review_ready")
+    else:
+        db.update_batch_status(batch_id, "completed")
+
+
+def drive_resource_payload(url: str) -> dict[str, str]:
+    try:
+        resource = parse_drive_resource(url)
+    except ValueError:
+        return {"resource_kind": "url", "resource_id": ""}
+    return {"resource_kind": resource.kind, "resource_id": resource.resource_id}
+
+
+def extension_download_item_payload(item: dict[str, Any]) -> dict[str, Any]:
+    source_type = item.get("source_type") or "design"
+    sku = item.get("item_sku") or item.get("sku") or f"row-{item['row_number']}"
+    folder = f"auto-download/batch-{item['batch_id']}/{safe_filename(str(sku))}"
+    payload = {
+        "download_item_id": int(item["id"]),
+        "batch_id": int(item["batch_id"]),
+        "order_id": int(item["order_id"]),
+        "order_no": item["order_no"],
+        "row_number": int(item["row_number"]),
+        "sku": sku,
+        "sku_folder": folder,
+        "source_type": source_type,
+        "url": item["design_link"],
+        "filename_prefix": f"{source_type}-{item['id']}-",
+        "status": item["status"],
+    }
+    payload.update(drive_resource_payload(str(item["design_link"])))
+    return payload
+
+
+def request_json_dict(body: Any) -> dict[str, Any]:
+    return body if isinstance(body, dict) else {}
 
 
 @app.on_event("startup")
@@ -413,6 +459,87 @@ def batch_status(request: Request, batch_id: int):
     user = require_user(request)
     batch = require_batch_access(batch_id, user)
     return {"batch": batch, "status_counts": db.get_batch_status_counts(batch_id)}
+
+
+@app.get("/api/extension/batches/{batch_id}/download-items")
+def extension_download_items(request: Request, batch_id: int, limit: int = 50):
+    user = require_user(request)
+    batch = require_batch_access(batch_id, user)
+    items = db.get_extension_download_items(batch_id, limit)
+    counts = db.get_batch_status_counts(batch_id)
+    return {
+        "batch": {
+            "id": int(batch["id"]),
+            "file_name": batch["file_name"],
+            "status": batch["status"],
+        },
+        "status_counts": counts,
+        "items": [extension_download_item_payload(item) for item in items],
+    }
+
+
+@app.post("/api/extension/download-items/{download_item_id}/start")
+def extension_start_download_item(request: Request, download_item_id: int):
+    user = require_user(request)
+    item = db.get_download_item(download_item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Download item not found")
+    require_batch_access(int(item["batch_id"]), user)
+    db.clear_downloaded_files(download_item_id)
+    db.mark_download_started(download_item_id)
+    refresh_batch_status_after_extension_update(int(item["batch_id"]))
+    return {"ok": True, "download_item_id": download_item_id}
+
+
+@app.post("/api/extension/download-items/{download_item_id}/success")
+def extension_download_item_success(
+    request: Request,
+    download_item_id: int,
+    body: Any = Body(default=None),
+):
+    user = require_user(request)
+    item = db.get_download_item(download_item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Download item not found")
+    require_batch_access(int(item["batch_id"]), user)
+    data = request_json_dict(body)
+    files = data.get("files") if isinstance(data.get("files"), list) else []
+    image_count = data.get("image_count")
+    try:
+        image_count = int(image_count)
+    except (TypeError, ValueError):
+        image_count = len(files)
+    if image_count <= 0:
+        image_count = 1
+    db.replace_downloaded_files_for_item(download_item_id, files)
+    db.mark_download_success(download_item_id, image_count)
+    refresh_batch_status_after_extension_update(int(item["batch_id"]))
+    return {"ok": True, "download_item_id": download_item_id, "image_count": image_count}
+
+
+@app.post("/api/extension/download-items/{download_item_id}/failure")
+def extension_download_item_failure(
+    request: Request,
+    download_item_id: int,
+    body: Any = Body(default=None),
+):
+    user = require_user(request)
+    item = db.get_download_item(download_item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Download item not found")
+    require_batch_access(int(item["batch_id"]), user)
+    data = request_json_dict(body)
+    error_code = str(data.get("error_code") or "extension_download_failed")
+    error_message = str(data.get("error_message") or "浏览器插件下载失败。")
+    error_detail = str(data.get("error_detail") or "")
+    db.mark_download_failed(
+        download_item_id,
+        error_message,
+        error_code=error_code,
+        error_detail=error_detail,
+    )
+    refresh_batch_status_after_extension_update(int(item["batch_id"]))
+    return {"ok": True, "download_item_id": download_item_id}
 
 
 @app.post("/batches/{batch_id}/start-download")

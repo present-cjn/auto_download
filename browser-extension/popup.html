@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="popup.css">
+    <title>插件下载</title>
+  </head>
+  <body>
+    <main>
+      <h1>插件下载</h1>
+      <label for="baseUrl">Web 地址</label>
+      <input id="baseUrl" type="url" value="http://localhost:8000">
+      <label for="batchId">批次 ID</label>
+      <input id="batchId" type="number" min="1" placeholder="例如 12">
+      <div class="actions">
+        <button id="start" type="button">开始</button>
+        <button id="pause" type="button">暂停</button>
+      </div>
+      <section class="status-panel">
+        <div><span id="state">未连接</span><label>状态</label></div>
+        <div><span id="done">0</span><label>成功</label></div>
+        <div><span id="failed">0</span><label>失败</label></div>
+      </section>
+      <p id="message"></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

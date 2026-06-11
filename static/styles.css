@@ -701,3 +701,59 @@ select {
     font-size: 24px;
   }
 }
+
+.extension-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 20px;
+  padding: 18px;
+}
+
+.extension-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 14px;
+}
+
+.extension-grid div {
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+
+.extension-grid span {
+  display: block;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.extension-grid label {
+  color: var(--muted);
+  display: block;
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.extension-copy {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.extension-copy code {
+  background: #eef2f7;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 6px 8px;
+}
+
+.extension-copy span {
+  color: var(--muted);
+  font-size: 14px;
+}
