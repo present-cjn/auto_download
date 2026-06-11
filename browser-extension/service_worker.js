@@ -40,6 +40,19 @@ async function getConfig() {
   return config;
 }
 
+async function saveConfig(baseUrl, batchId) {
+  const normalizedBaseUrl = String(baseUrl || "").replace(/\/$/, "");
+  const normalizedBatchId = String(batchId || "").trim();
+  if (!normalizedBaseUrl || !normalizedBatchId) {
+    throw new Error("缺少 Web 地址或批次 ID。 ");
+  }
+  await chrome.storage.local.set({
+    baseUrl: normalizedBaseUrl,
+    batchId: normalizedBatchId
+  });
+  return { baseUrl: normalizedBaseUrl, batchId: normalizedBatchId };
+}
+
 async function getSessionToken(baseUrl) {
   const cookie = await chrome.cookies.get({ url: baseUrl, name: SESSION_COOKIE });
   if (!cookie || !cookie.value) {
@@ -121,10 +134,17 @@ async function driveFetchJson(url, token) {
 
 async function listFolderImages(folderId, token) {
   const query = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
-  const fields = encodeURIComponent("files(id,name,mimeType,size)");
-  const url = `https://www.googleapis.com/drive/v3/files?q=${query}&fields=${fields}&pageSize=1000`;
-  const data = await driveFetchJson(url, token);
-  return (data.files || []).filter((file) => String(file.mimeType || "").startsWith(IMAGE_MIME_PREFIX));
+  const fields = encodeURIComponent("nextPageToken,files(id,name,mimeType,size)");
+  const files = [];
+  let pageToken = "";
+  do {
+    const tokenParam = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : "";
+    const url = `https://www.googleapis.com/drive/v3/files?q=${query}&fields=${fields}&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true${tokenParam}`;
+    const data = await driveFetchJson(url, token);
+    files.push(...(data.files || []));
+    pageToken = data.nextPageToken || "";
+  } while (pageToken);
+  return files.filter((file) => String(file.mimeType || "").startsWith(IMAGE_MIME_PREFIX));
 }
 
 function waitForDownload(downloadId) {
@@ -224,7 +244,7 @@ async function processTask(baseUrl, task) {
   await setStatus({ state: "下载中", message: `${task.sku} · ${task.source_type}` });
   try {
     let token = await getDriveToken(false);
-    if (task.resource_kind === "folder" && !token) {
+    if ((task.resource_kind === "folder" || task.resource_kind === "file") && !token && hasConfiguredOAuthClient()) {
       token = await getDriveToken(true);
     }
     let files;
@@ -261,6 +281,7 @@ async function runQueue() {
   }
   workerRunning = true;
   paused = false;
+  const attemptedIds = new Set();
   await setStatus({ running: true, state: "运行中", done: 0, failed: 0, message: "正在连接 Web..." });
   try {
     while (!paused) {
@@ -272,7 +293,7 @@ async function runQueue() {
         config.baseUrl,
         `/api/extension/batches/${encodeURIComponent(config.batchId)}/download-items?limit=20`
       );
-      const items = payload.items || [];
+      const items = (payload.items || []).filter((item) => !attemptedIds.has(item.download_item_id));
       if (!items.length) {
         await setStatus({ state: "已完成", message: "没有待下载项。" });
         break;
@@ -281,6 +302,7 @@ async function runQueue() {
         if (paused) {
           break;
         }
+        attemptedIds.add(task.download_item_id);
         await processTask(config.baseUrl, task);
         await sleep(randomDelayMs());
       }
@@ -297,6 +319,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "start") {
     runQueue();
     sendResponse({ ok: true });
+    return true;
+  }
+  if (message.type === "configureAndStart") {
+    saveConfig(message.baseUrl, message.batchId)
+      .then((config) => {
+        runQueue();
+        sendResponse({ ok: true, config });
+      })
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error: String(error && error.message ? error.message : error)
+        });
+      });
     return true;
   }
   if (message.type === "pause") {

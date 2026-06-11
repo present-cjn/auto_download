@@ -67,6 +67,7 @@ ERROR_LABELS = {
     "drive_download_failed": "Drive 下载失败",
     "download_timeout": "下载超时",
     "no_images_found": "未找到图片",
+    "extension_download_failed": "插件下载失败",
     "interrupted": "任务中断",
     "unknown_error": "未知错误",
 }

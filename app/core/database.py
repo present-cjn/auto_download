@@ -977,7 +977,7 @@ def get_extension_download_items(batch_id: int, limit: int = 50) -> list[dict[st
             FROM download_items di
             JOIN order_items oi ON oi.id = di.order_item_id
             WHERE di.batch_id = ? AND di.status IN ('pending', 'failed')
-            ORDER BY di.id
+            ORDER BY CASE di.status WHEN 'pending' THEN 1 WHEN 'failed' THEN 2 ELSE 3 END, di.id
             LIMIT ?
             """,
             (batch_id, limit),

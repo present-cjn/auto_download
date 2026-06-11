@@ -10,10 +10,8 @@
     "storage"
   ],
   "host_permissions": [
-    "http://localhost/*",
-    "http://127.0.0.1/*",
-    "https://drive.google.com/*",
-    "https://www.googleapis.com/*"
+    "http://*/*",
+    "https://*/*"
   ],
   "background": {
     "service_worker": "service_worker.js"
@@ -22,6 +20,17 @@
     "default_popup": "popup.html",
     "default_title": "Order Design Downloader"
   },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content_script.js"
+      ]
+    }
+  ],
   "oauth2": {
     "client_id": "REPLACE_WITH_CHROME_EXTENSION_OAUTH_CLIENT_ID.apps.googleusercontent.com",
     "scopes": [

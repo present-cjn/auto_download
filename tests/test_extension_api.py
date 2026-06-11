@@ -145,3 +145,24 @@ def test_extension_success_and_failure_update_download_state(tmp_path: Path) -> 
         assert counts["failed"] == 1
     finally:
         db.DB_PATH = original_path
+
+
+def test_extension_download_items_prioritize_pending_before_failed(tmp_path: Path) -> None:
+    original_path, token, batch_id, _ = setup_extension_batch(tmp_path / "app.db")
+    try:
+        request = FakeRequest(token)
+        items = extension_download_items(request, batch_id)["items"]
+        first_id = items[0]["download_item_id"]
+
+        db.mark_download_failed(
+            first_id,
+            "插件失败",
+            error_code="extension_download_failed",
+            error_detail="Drive API 403",
+        )
+
+        reordered = extension_download_items(request, batch_id)["items"]
+        assert [item["status"] for item in reordered] == ["pending", "failed"]
+        assert reordered[-1]["download_item_id"] == first_id
+    finally:
+        db.DB_PATH = original_path

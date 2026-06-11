@@ -78,13 +78,13 @@
   </div>
   <div class="actions">
     <form method="post" action="/batches/{{ batch.id }}/start-download">
-      <button class="button primary" type="submit" name="limit" value="10" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>下载 10 项</button>
-      <button class="button subtle" type="submit" name="limit" value="20" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>下载 20 项</button>
-      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>继续全部</button>
+      <button class="button subtle" type="submit" name="limit" value="10" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>备用服务器下载 10 项</button>
+      <button class="button subtle" type="submit" name="limit" value="20" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>备用服务器下载 20 项</button>
+      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>备用服务器继续全部</button>
     </form>
     <form method="post" action="/batches/{{ batch.id }}/retry-failed">
-      <button class="button subtle" type="submit" name="limit" value="10" {% if batch.failed_count == 0 or batch.status == "downloading" %}disabled{% endif %}>重试 10 个失败项</button>
-      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.failed_count == 0 or batch.status == "downloading" %}disabled{% endif %}>重试全部失败项</button>
+      <button class="button subtle" type="submit" name="limit" value="10" {% if batch.failed_count == 0 or batch.status == "downloading" %}disabled{% endif %}>备用重试 10 个失败项</button>
+      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.failed_count == 0 or batch.status == "downloading" %}disabled{% endif %}>备用重试全部失败项</button>
     </form>
     {% if batch_archive_ready %}
     <a class="button subtle" href="/batches/{{ batch.id }}/download.zip">一键下载全部订单</a>
@@ -136,9 +136,52 @@
   </div>
   <div class="extension-copy">
     <code>{{ request.url.scheme }}://{{ request.url.netloc }}</code>
-    <span>在插件中填入上面的 Web 地址和批次 ID。插件会复用当前登录会话，只下载你有权限访问的批次。</span>
+    <button
+      class="button primary"
+      id="extension-start"
+      type="button"
+      data-base-url="{{ request.url.scheme }}://{{ request.url.netloc }}"
+      data-batch-id="{{ batch.id }}"
+      {% if batch.status == "downloading" or batch.status == "needs_fix" or (status_counts.pending + status_counts.failed) == 0 %}disabled{% endif %}
+    >用插件下载待处理项</button>
+    <span id="extension-start-status">插件会复用当前登录会话，只下载你有权限访问的批次。</span>
   </div>
 </section>
+
+<script>
+  (function () {
+    var button = document.getElementById("extension-start");
+    var status = document.getElementById("extension-start-status");
+    if (!button || !status) {
+      return;
+    }
+
+    window.addEventListener("message", function (event) {
+      if (event.source !== window || !event.data || event.data.type !== "autoDownloadExtensionAck") {
+        return;
+      }
+      if (event.data.ok) {
+        status.textContent = "已发送到插件，插件会在后台下载并更新本页状态。";
+      } else {
+        status.textContent = "插件启动失败：" + (event.data.error || "未知错误");
+      }
+    });
+
+    button.addEventListener("click", function () {
+      status.textContent = "正在唤起插件...";
+      window.postMessage({
+        type: "autoDownloadExtensionStart",
+        baseUrl: button.dataset.baseUrl,
+        batchId: button.dataset.batchId
+      }, window.location.origin);
+      window.setTimeout(function () {
+        if (status.textContent === "正在唤起插件...") {
+          status.textContent = "未检测到插件响应，请确认已安装并启用浏览器插件。";
+        }
+      }, 2500);
+    });
+  }());
+</script>
 
 {% if batch.status == "review_ready" %}
 <section class="notice">

@@ -1,12 +1,10 @@
-# Browser Extension Download POC
+# Browser Extension Download
 
-This branch is a proof of concept for moving Google Drive image downloads from the server to the user's Chrome browser while keeping the existing Web app as the order and batch control plane.
+This feature moves Google Drive image downloads from the server to the user's Chrome browser while keeping the existing Web app as the order and batch control plane.
 
 ## Goal
 
-The POC keeps the current Excel upload, parsing, batch review, account permissions, and download status model. A Chrome extension pulls pending or failed `download_items` from the Web app, downloads images locally into SKU folders, and reports success or failure back to the Web app.
-
-This branch is intended for review and feature extraction. It should not be merged directly into the main line without productizing configuration, UX, retry behavior, and packaging.
+The Web app keeps Excel upload, parsing, batch review, account permissions, and download status. A Chrome extension pulls pending or failed `download_items`, downloads images locally into SKU folders, and reports success or failure back to the Web app.
 
 ## How To Run
 
@@ -29,7 +27,7 @@ Open the Web app locally:
 http://localhost:8001
 ```
 
-Upload an Excel file as a new batch. Do not click the original server-side download buttons when testing the extension path; start the download from the Chrome extension popup instead.
+Upload an Excel file as a new batch. The batch page shows a primary plugin download panel. The original server-side download buttons are still available as backup actions.
 
 ## Chrome Extension
 
@@ -46,14 +44,9 @@ In Chrome:
 3. Click Load unpacked.
 4. Select the `browser-extension/` directory.
 5. Log in to the Web app in the same Chrome profile.
-6. In the extension popup, enter the Web base URL and batch ID.
+6. Open a batch page and click `用插件下载待处理项`.
 
-Example:
-
-```text
-Web URL: http://localhost:8001
-Batch ID: 1
-```
+The popup remains available for status checks, pause, and manual fallback if page-to-extension messaging needs to be tested.
 
 Downloaded files are saved under the browser Downloads directory:
 
@@ -85,19 +78,19 @@ A different unpacked extension ID requires a different Chrome Extension OAuth cl
 
 ## Current Behavior
 
+- The batch page can send the current Web base URL and batch ID to the extension.
 - The extension reads the Web session cookie and sends it as `X-App-Session`.
 - The Web app only returns batches the current user can access.
-- The extension processes pending and failed download items.
+- The extension processes pending and failed download items, but a single run will not retry the same failed item repeatedly.
 - Drive folder links are listed via Drive API and downloaded image by image.
 - Drive file links are downloaded via Drive API when OAuth is available, with a fallback download URL for public files.
 - Downloaded file names keep the source type and `download_items.id` prefix to avoid collisions and support debugging.
 
 ## Known Limits
 
-- This is a POC, not a packaged production extension.
-- Starting downloads still happens from the extension popup, not directly from the Web page.
+- This is an internal unpacked-extension workflow, not a Chrome Web Store package.
 - The Web app records browser-reported paths and counts; it does not verify files on the user's laptop.
-- Existing server-side download buttons and `gdown` logic are still present.
+- Existing server-side download buttons and `gdown` logic are still present as backup actions.
 - There is no extension auto-update or managed OAuth configuration yet.
 - Failed/partial local downloads should be validated during formal feature development.
 
@@ -107,11 +100,7 @@ Current checks before committing this POC:
 
 ```text
 node --check browser-extension/service_worker.js
+node --check browser-extension/content_script.js
+node --check browser-extension/popup.js
 python -m pytest
-```
-
-Latest result:
-
-```text
-36 passed
 ```
