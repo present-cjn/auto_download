@@ -1,6 +1,6 @@
 # Order Design Image Downloader
 
-本项目第一阶段是一个轻量订单设计图下载工具：读取客户每天提供的订单 Excel，根据订单号创建目录，并下载 `Design Link` 中的 Google Drive 图片。
+本项目第一阶段是一个轻量订单设计图下载工具：读取客户每天提供的订单 Excel，根据订单号创建目录，并下载 `Design Link` / `Mockup Link` 中的 Google Drive 图片。
 
 当前支持 CLI 和轻量 Web 两种运行方式。后续方向是演进成云端订单管理服务，逐步支持订单维护、物流运单号获取/生成、物流跟踪、生产进度跟踪和导入导出自动化。当前代码先服务最重要的交付目标：稳定下图。
 
@@ -23,7 +23,7 @@ python -m pip install -r requirements.txt
 ADMIN_USERNAME=admin ADMIN_PASSWORD=change-me uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-单个 Google Drive 下载任务默认 180 秒超时；可用 `DRIVE_DOWNLOAD_TIMEOUT_SECONDS` 调整，例如测试时设为 `60`。
+服务器备用下载的单个 Google Drive 下载任务默认 180 秒超时；可用 `DRIVE_DOWNLOAD_TIMEOUT_SECONDS` 调整，例如测试时设为 `60`。
 
 打开：
 
@@ -48,20 +48,29 @@ Web 工具支持：
 - 后台解析订单和 SKU 明细。
 - 展示导入预检摘要，包括空链接、非 Drive 链接、重复链接和多 SKU 订单。
 - 进入批次详情页查看订单和 SKU 明细。
-- 确认字段无误后手动开始下载设计图。
+- 确认字段无误后使用浏览器插件下载设计图；服务器下载入口保留为备用。
 - 查看批次、订单、SKU、下载状态、失败类型和失败原因。
 - 批量重试失败项，或单独重试失败明细。
 - 对无法自动下载的失败项标记为已手动处理。
 - 打开原始 Google Drive 链接，便于人工预览或手动下载。
-- 单独下载某个订单 ZIP，或一键下载全部订单 ZIP。
+- 浏览器插件会把图片保存到本机 Downloads 的 SKU 文件夹。
+- 服务器备用下载完成后，可单独下载某个订单 ZIP，或一键下载全部订单 ZIP。
 
-云端部署时的下载链路是：
+当前内部测试推荐下载链路是：
+
+```text
+Google Drive -> 用户 Chrome 插件 -> 用户本机 Downloads/auto-download/batch-<id>/<sku>/
+```
+
+浏览器插件会复用 Web 登录会话，使用当前 Chrome Profile 授权的 Google Drive 只读权限下载文件，并把成功/失败状态回写到 Web。
+
+服务器备用下载链路仍保留：
 
 ```text
 Google Drive -> 服务器后台任务 -> 服务器保存图片 -> 服务器生成 ZIP -> 用户下载 ZIP 到本地
 ```
 
-也就是说，点击“开始/继续下载”后，图片先下载到服务器，不依赖用户电脑持续联网或浏览器保持打开。用户最后通过“下载 ZIP”把服务器整理好的结果包下载到本地。
+也就是说，点击“备用服务器下载”后，图片先下载到服务器，不依赖用户电脑持续联网或浏览器保持打开。由于 Google Drive 对服务器公开链接下载容易限流，当前只作为应急备用路径。
 
 第一版数据保存在：
 
@@ -158,6 +167,7 @@ orders/<sku>/
 - `WORKFLOW.md`：当前人工流程和目标系统流程。
 - `IMPORT_EXPORT_SPEC.md`：Excel 导入导出字段映射与更新策略。
 - `STATUS_MODEL.md`：订单、图片、履约、物流等状态定义。
+- `BROWSER_EXTENSION_STABLE_TESTING.md`：当前浏览器插件内部测试稳定版手册。
 - `ARCHITECTURE.md`：当前 CLI 到未来云端服务的架构演进。
 - `API_SPEC.md`：未来 Web API 设计占位。
 - `PERMISSIONS.md`：未来角色和权限设计。

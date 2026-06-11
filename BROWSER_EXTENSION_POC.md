@@ -2,6 +2,8 @@
 
 This feature moves Google Drive image downloads from the server to the user's Chrome browser while keeping the existing Web app as the order and batch control plane.
 
+For the current internal stable testing workflow, use `BROWSER_EXTENSION_STABLE_TESTING.md`. This file keeps the technical background and behavior notes.
+
 ## Goal
 
 The Web app keeps Excel upload, parsing, batch review, account permissions, and download status. A Chrome extension pulls pending or failed `download_items`, downloads images locally into SKU folders, and reports success or failure back to the Web app.

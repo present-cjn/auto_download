@@ -2,6 +2,8 @@
 
 This unpacked Chrome extension downloads Google Drive order images into local SKU folders and reports status back to the Web app.
 
+For the full internal testing workflow, server commands, OAuth setup, and troubleshooting, see `../BROWSER_EXTENSION_STABLE_TESTING.md`.
+
 ## Load locally
 
 1. Open `chrome://extensions`.
