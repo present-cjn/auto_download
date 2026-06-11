@@ -124,6 +124,22 @@
   </div>
 </section>
 
+<section class="extension-panel">
+  <div class="section-heading">
+    <h2>插件下载</h2>
+    <p>浏览器插件会读取当前批次的待下载项，并将图片保存到本机 Downloads/auto-download/batch-{{ batch.id }}/SKU/。</p>
+  </div>
+  <div class="extension-grid">
+    <div><span>#{{ batch.id }}</span><label>当前批次 ID</label></div>
+    <div><span>{{ status_counts.pending + status_counts.failed }}</span><label>待插件处理</label></div>
+    <div><span>{{ status_counts.downloading }}</span><label>插件/服务器处理中</label></div>
+  </div>
+  <div class="extension-copy">
+    <code>{{ request.url.scheme }}://{{ request.url.netloc }}</code>
+    <span>在插件中填入上面的 Web 地址和批次 ID。插件会复用当前登录会话，只下载你有权限访问的批次。</span>
+  </div>
+</section>
+
 {% if batch.status == "review_ready" %}
 <section class="notice">
   已解析完成。确认订单、SKU、Design Link 和 Mockup Link 无误后，可以点击“开始/继续下载”。

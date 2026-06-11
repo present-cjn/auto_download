@@ -1,0 +1,90 @@
+body {
+  color: #172033;
+  font-family: Arial, "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  margin: 0;
+  width: 340px;
+}
+
+main {
+  padding: 14px;
+}
+
+h1 {
+  font-size: 18px;
+  margin: 0 0 12px;
+}
+
+label {
+  color: #657084;
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  margin: 10px 0 4px;
+}
+
+input {
+  border: 1px solid #d8dde6;
+  border-radius: 6px;
+  box-sizing: border-box;
+  font: inherit;
+  height: 36px;
+  padding: 0 8px;
+  width: 100%;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+button {
+  background: #126b5d;
+  border: 1px solid #126b5d;
+  border-radius: 6px;
+  color: #ffffff;
+  cursor: pointer;
+  flex: 1;
+  font: inherit;
+  height: 36px;
+}
+
+button#pause {
+  background: #ffffff;
+  color: #172033;
+  border-color: #d8dde6;
+}
+
+.status-panel {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, 1fr);
+  margin-top: 12px;
+}
+
+.status-panel div {
+  background: #f6f7f9;
+  border: 1px solid #d8dde6;
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.status-panel span {
+  display: block;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-panel label {
+  margin: 3px 0 0;
+}
+
+p {
+  color: #657084;
+  line-height: 1.45;
+  margin: 12px 0 0;
+  min-height: 20px;
+}

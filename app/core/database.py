@@ -966,6 +966,25 @@ def get_pending_download_items(batch_id: int) -> list[dict[str, Any]]:
         return [row_to_dict(row) for row in rows]
 
 
+def get_extension_download_items(batch_id: int, limit: int = 50) -> list[dict[str, Any]]:
+    limit = max(1, min(limit, 200))
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                di.*,
+                oi.sku AS item_sku
+            FROM download_items di
+            JOIN order_items oi ON oi.id = di.order_item_id
+            WHERE di.batch_id = ? AND di.status IN ('pending', 'failed')
+            ORDER BY di.id
+            LIMIT ?
+            """,
+            (batch_id, limit),
+        ).fetchall()
+        return [row_to_dict(row) for row in rows]
+
+
 def get_failed_download_items(batch_id: int) -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
@@ -1125,3 +1144,43 @@ def clear_downloaded_files(download_item_id: int) -> None:
             "DELETE FROM downloaded_files WHERE download_item_id = ?",
             (download_item_id,),
         )
+
+
+def replace_downloaded_files_for_item(
+    download_item_id: int, files: list[dict[str, Any]]
+) -> None:
+    item = get_download_item(download_item_id)
+    if not item:
+        return
+    with connect() as conn:
+        conn.execute(
+            "DELETE FROM downloaded_files WHERE download_item_id = ?",
+            (download_item_id,),
+        )
+        for file_info in files:
+            file_name = str(file_info.get("file_name") or "").strip()
+            local_path = str(file_info.get("local_path") or file_name).strip()
+            if not file_name:
+                continue
+            try:
+                file_size = int(file_info.get("file_size") or 0)
+            except (TypeError, ValueError):
+                file_size = 0
+            conn.execute(
+                """
+                INSERT INTO downloaded_files (
+                    download_item_id, batch_id, order_id, order_no,
+                    file_name, local_path, file_size
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    download_item_id,
+                    int(item["batch_id"]),
+                    int(item["order_id"]),
+                    item["order_no"],
+                    file_name,
+                    local_path,
+                    max(0, file_size),
+                ),
+            )
