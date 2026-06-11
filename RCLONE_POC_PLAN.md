@@ -32,11 +32,117 @@ rclone about gdrive:
 mkdir -p rclone-test rclone-results
 ```
 
+也可以直接使用项目里的 PoC 脚本。先复制示例清单，填入真实但不提交 Git 的 Drive 分享链接、ID 或路径：
+
+```bash
+cp scripts/rclone_poc_cases.example.json scripts/rclone_poc_cases.local.json
+nano scripts/rclone_poc_cases.local.json
+```
+
+运行前先做语法检查：
+
+```bash
+python3 -m py_compile scripts/rclone_poc.py
+```
+
+运行 PoC：
+
+```bash
+python3 scripts/rclone_poc.py \
+  --manifest scripts/rclone_poc_cases.local.json \
+  --remote gdrive \
+  --output-dir rclone-test \
+  --log-dir rclone-results \
+  --clean --clean-logs
+```
+
+先只跑前 2 个 case：
+
+```bash
+python3 scripts/rclone_poc.py \
+  --manifest scripts/rclone_poc_cases.local.json \
+  --remote gdrive \
+  --limit 2 \
+  --clean --clean-logs
+```
+
+脚本会输出每个 case 的成功/失败、耗时、文件数量、总大小和日志路径，并写入：
+
+```text
+rclone-results/summary.json
+```
+
+`scripts/rclone_poc_cases.local.json`、`rclone-test/` 和 `rclone-results/` 都不会提交 Git。
+
 建议所有测试命令加保守参数：
 
 ```bash
 --transfers 1 --checkers 1 --drive-pacer-min-sleep 500ms --drive-pacer-burst 5
 ```
+
+PoC 脚本默认使用同样的保守参数，可用命令行参数覆盖。
+
+## 测试清单格式
+
+支持 `file_id`、`folder_id` 和 `path` 三种类型：
+
+```json
+[
+  {
+    "name": "failed-mockup-file",
+    "type": "file_id",
+    "url": "https://drive.google.com/file/d/google-drive-file-id/view?usp=sharing",
+    "target_name": "mockup.png"
+  },
+  {
+    "name": "failed-design-folder",
+    "type": "folder_id",
+    "url": "https://drive.google.com/drive/folders/google-drive-folder-id?usp=sharing"
+  },
+  {
+    "name": "known-path-folder",
+    "type": "path",
+    "path": "Folder Name/Sub Folder",
+    "mode": "copy"
+  }
+]
+```
+
+说明：
+
+- `file_id` 使用 `rclone backend copyid` 下载单文件。
+- `folder_id` 使用 `--drive-root-folder-id` 下载整个文件夹，不创建临时 remote，也不读取 token。
+- `file_id` 和 `folder_id` 都支持 `url` 或 `id` 字段。为了减少手工出错，优先直接粘贴 Drive 分享链接。
+- `path` 适合授权账号能在 `gdrive:` 下按路径访问的文件或文件夹。
+
+## 服务器运行建议
+
+在服务器项目目录 `/opt/auto_download` 下执行：
+
+```bash
+cd /opt/auto_download
+cp scripts/rclone_poc_cases.example.json scripts/rclone_poc_cases.local.json
+nano scripts/rclone_poc_cases.local.json
+python3 scripts/rclone_poc.py \
+  --manifest scripts/rclone_poc_cases.local.json \
+  --remote gdrive \
+  --output-dir rclone-test \
+  --log-dir rclone-results \
+  --limit 2 \
+  --clean --clean-logs
+```
+
+确认前 2 个 case 正常后，再去掉 `--limit 2`，或改为 `--limit 10` 做小批量测试。
+
+查看结果：
+
+```bash
+cat rclone-results/summary.json
+find rclone-test -maxdepth 3 -type f -printf '%p | %s bytes\n'
+tail -n 80 rclone-results/<case-name>.log
+```
+
+如果 `summary.json` 显示成功但文件数量或大小不符合预期，优先检查对应 case 的日志和下载目录。
 
 ## 单文件夹测试
 

@@ -1,0 +1,37 @@
+[
+  {
+    "name": "failed-mockup-file-example",
+    "type": "file_id",
+    "url": "https://drive.google.com/file/d/google-drive-file-id/view?usp=sharing",
+    "target_name": "mockup-image"
+  },
+  {
+    "name": "failed-design-folder-example",
+    "type": "folder_id",
+    "url": "https://drive.google.com/drive/folders/google-drive-folder-id?usp=sharing"
+  },
+  {
+    "name": "file-id-direct-example",
+    "type": "file_id",
+    "id": "google-drive-file-id",
+    "target_name": "mockup.png"
+  },
+  {
+    "name": "folder-id-direct-example",
+    "type": "folder_id",
+    "id": "google-drive-folder-id"
+  },
+  {
+    "name": "known-path-folder-example",
+    "type": "path",
+    "path": "Folder Name/Sub Folder",
+    "mode": "copy"
+  },
+  {
+    "name": "known-path-file-example",
+    "type": "path",
+    "path": "Folder Name/mockup.png",
+    "mode": "copyto",
+    "target_name": "mockup.png"
+  }
+]

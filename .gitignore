@@ -17,3 +17,4 @@ rclone-test/
 rclone-results/
 .rclone-test/
 rclone.conf
+scripts/rclone_poc_cases.local.json
