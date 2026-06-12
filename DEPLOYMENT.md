@@ -189,7 +189,7 @@ server {
     listen 443 ssl;
     server_name dev.waysing.cn;
 
-    ssl_certificate /etc/nginx/ssl/dev.waysing.cn_bundle.crt;
+    ssl_certificate /etc/nginx/ssl/dev.waysing.cn.crt;
     ssl_certificate_key /etc/nginx/ssl/dev.waysing.cn.key;
     ssl_protocols TLSv1.2 TLSv1.3;
 
