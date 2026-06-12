@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "Order Design Downloader",
   "version": "0.1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzvfxcRjoFWqYeXZKv2G4boRkjZtrrH1A1mw36LWmVgBjRxARq0MO6k/pm8TQAwcL9fLb54bruNj82jphJNQXiH3YJszV+JkhKa/7zlkgBoqJjuzWiupWbtC+l3oEsbkuQ5BarawaZN7ENBvrDBHkRduR9s8gCYcodzFif/wNabG4qh7gfwfaT+9hIAciXOM13miGrFpVtqJmRwl3H60CHghUECb5LKUvWDz4otOdnRX/p6rsT/bFLjftt3qSmO7sqY1Fmu2ZiIkB1bfnGfkwMGqn5v3p+xL1hSvmCflSRUd50yjJWEja8cmim2a1rVjV3Qz+ZSPwnP7FsZ5EGNe5HQIDAQAB",
   "description": "Download order design images from the Web tool into SKU folders.",
   "permissions": [
     "cookies",
@@ -32,7 +33,7 @@
     }
   ],
   "oauth2": {
-    "client_id": "REPLACE_WITH_CHROME_EXTENSION_OAUTH_CLIENT_ID.apps.googleusercontent.com",
+    "client_id": "574532014845-uc8jlk5i1a9l9iskamcqclpjefanhsfk.apps.googleusercontent.com",
     "scopes": [
       "https://www.googleapis.com/auth/drive.readonly"
     ]
