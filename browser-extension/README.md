@@ -2,6 +2,8 @@
 
 This unpacked Chrome extension downloads Google Drive order images into local SKU folders and reports status back to the Web app.
 
+Internal testing extension ID: `nodoinolmkijilpcgncdcglmplkleaie`.
+
 For the full internal testing workflow, server commands, OAuth setup, and troubleshooting, see `../BROWSER_EXTENSION_STABLE_TESTING.md`.
 
 ## Load locally
@@ -17,11 +19,15 @@ The extension popup can still be used to view status, pause the current run, or 
 
 ## Google Drive folders
 
-Drive folder downloads require Google OAuth. Replace the placeholder `oauth2.client_id` in `manifest.json` with a Chrome Extension OAuth client ID that has Drive readonly scope enabled.
+Drive folder downloads require Google OAuth. The committed `oauth2.client_id` in `manifest.json` is the internal testing Chrome Extension OAuth client with Drive readonly scope enabled.
 
 Single public Drive file links may work without OAuth. Private files and folders require the Chrome profile to authorize a Google account that can access the Drive resources.
 
-For unpacked extensions, the Chrome extension ID shown in `chrome://extensions` must match the Chrome Extension OAuth client configured in Google Cloud.
+The committed `manifest.json` contains a fixed public `key` and Chrome Extension OAuth client ID. Do not replace them for normal internal testing.
+
+The Chrome extension ID shown in `chrome://extensions` must be `nodoinolmkijilpcgncdcglmplkleaie`, and the Google Cloud Chrome Extension OAuth client must use that same extension ID.
+
+Keep the private `.pem` that generated the manifest key offline with the maintainer. Do not commit or distribute it.
 
 ## Output
 

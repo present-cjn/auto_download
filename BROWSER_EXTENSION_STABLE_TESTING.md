@@ -5,8 +5,9 @@
 ## 版本定位
 
 - 适用范围：内部测试，面向少量操作员。
-- Web 分支：`feature/browser-extension-downloader`。
+- Web 分支：`master`。
 - 插件形态：Chrome unpacked extension，不是 CRX，也不是 Chrome Web Store 发布版。
+- 固定插件 ID：`nodoinolmkijilpcgncdcglmplkleaie`。
 - 默认 Web 地址：`https://dev.waysing.cn`。
 - 当前不把浏览器下载文件回传服务器；文件保存到用户本机 Downloads。
 
@@ -17,9 +18,13 @@
 - 发布日期：2026-06-12。
 - 默认入口：`https://dev.waysing.cn`。
 - 服务器路径：`/opt/auto_download`。
-- 发布分支：`feature/browser-extension-downloader`。
+- 发布分支：`master`。
+- 合并策略：浏览器插件下载功能由 `feature/browser-extension-downloader` 合并到 `master`，后续物流订单接入从合并后的 `master` 新开 feature 分支。
 - 主要内容：
   - 浏览器插件下载为推荐链路，服务器 gdown 下载仅保留为管理员应急入口。
+  - 服务器备用下载入口已从普通操作员界面隐藏，仅管理员可展开应急使用。
+  - 插件 manifest 已提交固定 public `key`，保持 unpacked/zip 安装时的扩展 ID 稳定。
+  - 插件 manifest 已提交 Chrome Extension OAuth client ID，匹配固定扩展 ID。
   - 插件 popup 显示本轮已处理、成功、失败、当前 SKU 和上一次失败原因。
   - Chrome downloads 快速完成和长时间等待场景已加固，单文件下载等待最长 30 分钟。
   - 腾讯云/DNSPod + 源站 Nginx HTTPS 已作为默认部署方式。
@@ -29,21 +34,16 @@
   - 插件默认 Web 地址为 `https://dev.waysing.cn`。
 - 已知限制：
   - 当前仍是 Chrome unpacked extension，不是 CRX 或 Chrome Web Store 发布版。
-  - OAuth client ID 仍需在本机 `browser-extension/manifest.json` 临时替换，不能提交。
+  - 固定扩展 ID 依赖 manifest 中的 public `key`；生成该 key 的 `.pem` 私钥必须由维护者离线保管，不能提交或分发。
   - 浏览器下载文件不回传服务器，正式输出以用户本机 Downloads 下的 SKU 目录为准。
+  - 当前物流订单接入尚未开始，本阶段只收敛浏览器插件下载链路。
 
 ## 安全规则
 
-- 不提交真实 OAuth client ID。
+- `browser-extension/manifest.json` 中的 public `key` 和 Chrome Extension OAuth client ID 可以提交，用于固定内部测试扩展 ID。
+- 不提交生成固定扩展 ID 的 `.pem` 私钥；不要发给同事，也不要放进项目目录。
 - 不提交 Google token、cookie、rclone config。
 - 不提交客户 Excel、下载结果、`data/`、`orders/` 或 Downloads 里的图片。
-- `browser-extension/manifest.json` 在 Git 中必须保持占位符：
-
-```text
-REPLACE_WITH_CHROME_EXTENSION_OAUTH_CLIENT_ID.apps.googleusercontent.com
-```
-
-本机测试时可以临时替换为真实 Chrome Extension OAuth client ID，但提交前必须排除该文件或恢复占位符。
 
 ## 服务器更新
 
@@ -67,7 +67,7 @@ curl -i --max-time 15 "https://dev.waysing.cn/api/extension/batches/3/download-i
 sudo journalctl -u auto-download -n 80 --no-pager
 ```
 
-未登录访问插件 API 时，正常结果通常是 `303 See Other` 跳到登录页。如果是 `404`，说明服务端代码不是当前 feature 分支或服务未重启。
+未登录访问插件 API 时，正常结果通常是 `303 See Other` 跳到登录页。如果是 `404`，说明服务端代码不是当前 `master` 或服务未重启。
 
 ## 本机插件更新
 
@@ -76,23 +76,17 @@ sudo journalctl -u auto-download -n 80 --no-pager
 ```bash
 cd /media/hzbz/dataset/project/auto_download
 git fetch origin
-git switch feature/browser-extension-downloader
+git switch master
 git pull
 ```
 
-编辑本机插件 manifest：
-
-```text
-browser-extension/manifest.json
-```
-
-把占位符替换为 Google Cloud 中创建的 Chrome Extension OAuth client ID。这个改动只保留在本机，不提交。
+插件 manifest 已包含固定 public `key` 和 Chrome Extension OAuth client ID，不需要同事本机替换。
 
 Chrome 中操作：
 
 1. 打开 `chrome://extensions`。
 2. 开启 Developer mode。
-3. 如果插件已加载，点击 Reload。
+3. 如果插件已加载，确认 ID 为 `nodoinolmkijilpcgncdcglmplkleaie`，然后点击 Reload。
 4. 如果插件目录变过，先 Remove，再 Load unpacked，选择 `browser-extension/`。
 5. 刷新 Web 批次页。
 
@@ -101,10 +95,10 @@ Chrome 中操作：
 Drive 文件夹下载需要 Google Drive API 列出文件。Google Cloud 中创建 OAuth client：
 
 - Application type: Chrome Extension
-- Extension ID: `chrome://extensions` 里当前 unpacked 插件的 ID
+- Extension ID: `nodoinolmkijilpcgncdcglmplkleaie`
 - Scope: `https://www.googleapis.com/auth/drive.readonly`
 
-如果 OAuth consent screen 是 Testing 模式，把测试 Google 账号加入 Test users。扩展 ID 变化后，需要创建或更新对应的 OAuth client。
+如果 OAuth consent screen 是 Testing 模式，把测试 Google 账号加入 Test users。只要 manifest 中的 public `key` 不变，unpacked/zip 安装后的扩展 ID 就会保持不变，OAuth client 不需要反复重建。
 
 ## 标准测试流程
 
@@ -169,7 +163,7 @@ await chrome.cookies.get({ url: "https://dev.waysing.cn", name: "app_session" })
 
 ### 插件 API 返回 `404`
 
-服务器未运行当前 feature 分支或未重启服务。检查：
+服务器未运行当前 `master` 或未重启服务。检查：
 
 ```bash
 cd /opt/auto_download
@@ -186,8 +180,9 @@ sudo systemctl restart auto-download
 
 检查：
 
-- Google Cloud OAuth client 的 Extension ID 是否等于 `chrome://extensions` 里的插件 ID。
-- `browser-extension/manifest.json` 是否替换成本机真实 client ID。
+- Google Cloud OAuth client 的 Extension ID 是否等于 `nodoinolmkijilpcgncdcglmplkleaie`。
+- `chrome://extensions` 里的插件 ID 是否等于 `nodoinolmkijilpcgncdcglmplkleaie`。
+- `browser-extension/manifest.json` 里的 OAuth client ID 是否仍是当前 Google Cloud 中配置的 Chrome Extension client。
 - 测试 Google 账号是否加入 OAuth consent screen 的 Test users。
 - 修改 manifest 后是否 Reload 插件。
 
@@ -220,7 +215,6 @@ https://dev.waysing.cn
 
 ## 后续生产化任务
 
-- 固定插件 ID 或打包 CRX，减少 OAuth client 反复绑定。
 - 收窄插件 `host_permissions` 到正式域名。
-- 增加更清晰的 Web 插件状态面板。
 - 评估 100+ 下载项连续运行和暂停恢复。
+- 物流订单接入从合并后的 `master` 新开 feature 分支开发。
