@@ -134,7 +134,7 @@ sudo cp /opt/auto_download/deploy/nginx/auto-download.conf /etc/nginx/sites-avai
 sudo nano /etc/nginx/sites-available/auto-download.conf
 ```
 
-把 `server_name example.com;` 改成真实域名；如果暂时没有域名，可以先填服务器公网 IP。
+示例配置默认使用 `server_name dev.waysing.cn;`。如果部署到其他域名，把它改成真实域名；如果暂时没有域名，可以先填服务器公网 IP。
 
 启用配置：
 
@@ -144,13 +144,87 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-浏览器访问：
+启用基础 HTTP 反代后，可以先验证：
 
 ```text
-http://<服务器IP或域名>
+http://dev.waysing.cn
 ```
 
-生产试用时建议配置 HTTPS。可以使用云厂商证书或 Certbot，确认域名解析完成后再启用。
+### 腾讯云/DNSPod 源站 HTTPS
+
+当前 `waysing.cn` 由 DNSPod 管理。不要按 Cloudflare Flexible 配置；应在源站 Nginx 直接配置 HTTPS。
+
+先在腾讯云控制台确认：
+
+- DNSPod 里 `dev.waysing.cn` 的 A 记录指向当前服务器公网 IP。
+- A 记录值不要填内网 IP、保留地址或带端口的值，例如不要填 `http://dev.waysing.cn:443`。
+- 服务器安全组放行 TCP `80` 和 `443`。
+
+申请并上传证书：
+
+1. 在腾讯云 SSL 证书控制台为 `dev.waysing.cn` 申请免费证书。
+2. 按 DNS 验证提示在 DNSPod 添加验证记录，等证书签发。
+3. 下载 Nginx 格式证书，把证书和私钥上传到服务器：
+
+```bash
+sudo mkdir -p /etc/nginx/ssl
+sudo cp dev.waysing.cn_bundle.crt /etc/nginx/ssl/dev.waysing.cn.crt
+sudo cp dev.waysing.cn.key /etc/nginx/ssl/dev.waysing.cn.key
+sudo chmod 600 /etc/nginx/ssl/dev.waysing.cn.key
+```
+
+Nginx 配置示例：
+
+```nginx
+server {
+    listen 80;
+    server_name dev.waysing.cn;
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name dev.waysing.cn;
+
+    ssl_certificate /etc/nginx/ssl/dev.waysing.cn_bundle.crt;
+    ssl_certificate_key /etc/nginx/ssl/dev.waysing.cn.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    client_max_body_size 100m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 3600;
+        proxy_send_timeout 3600;
+    }
+}
+```
+
+更新 Nginx 后验证：
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+curl -i http://dev.waysing.cn/health
+curl -i --max-time 15 https://dev.waysing.cn/health
+```
+
+配置源站 HTTPS 后，浏览器访问：
+
+```text
+https://dev.waysing.cn
+```
+
+期望结果：HTTP 会跳转到 HTTPS，HTTPS 返回 `{"status":"ok"}`。
 
 ## 7. 验证流程
 

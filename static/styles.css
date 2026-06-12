@@ -757,3 +757,13 @@ select {
   color: var(--muted);
   font-size: 14px;
 }
+
+.extension-note {
+  background: #fff7e6;
+  border: 1px solid #f0cf8a;
+  border-radius: var(--radius);
+  color: #684400;
+  font-size: 14px;
+  margin-top: 12px;
+  padding: 10px 12px;
+}

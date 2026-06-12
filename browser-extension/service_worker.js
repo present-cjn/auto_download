@@ -1,7 +1,9 @@
 const SESSION_COOKIE = "app_session";
+const DEFAULT_BASE_URL = "https://dev.waysing.cn";
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const IMAGE_MIME_PREFIX = "image/";
 const DOWNLOAD_RETRY_DELAYS_MS = [3000, 8000, 15000];
+const DOWNLOAD_WAIT_TIMEOUT_MS = 30 * 60 * 1000;
 const RETRIABLE_DOWNLOAD_ERRORS = new Set([
   "NETWORK_FAILED",
   "NETWORK_TIMEOUT",
@@ -79,8 +81,9 @@ async function setStatus(patch) {
 
 async function getConfig() {
   const config = await chrome.storage.local.get({
-    baseUrl: "http://localhost:8000",
+    baseUrl: DEFAULT_BASE_URL,
     batchId: "",
+    processed: 0,
     done: 0,
     failed: 0
   });
@@ -198,7 +201,48 @@ async function listFolderImages(folderId, token) {
 
 function waitForDownload(downloadId) {
   return new Promise((resolve, reject) => {
-    activeDownloadResolvers.set(downloadId, { resolve, reject });
+    const resolveDownload = () => {
+      const resolver = activeDownloadResolvers.get(downloadId);
+      if (!resolver) {
+        return;
+      }
+      activeDownloadResolvers.delete(downloadId);
+      resolver.resolve();
+    };
+    const rejectDownload = (error) => {
+      const resolver = activeDownloadResolvers.get(downloadId);
+      if (!resolver) {
+        return;
+      }
+      activeDownloadResolvers.delete(downloadId);
+      resolver.reject(error);
+    };
+    const timeoutId = setTimeout(() => {
+      rejectDownload(new Error(`download timeout after ${Math.round(DOWNLOAD_WAIT_TIMEOUT_MS / 60000)} minutes`));
+    }, DOWNLOAD_WAIT_TIMEOUT_MS);
+    const settle = (callback) => (value) => {
+      clearTimeout(timeoutId);
+      callback(value);
+    };
+    activeDownloadResolvers.set(downloadId, {
+      resolve: settle(resolve),
+      reject: settle(reject)
+    });
+    chrome.downloads.search({ id: downloadId })
+      .then((downloads) => {
+        if (!activeDownloadResolvers.has(downloadId)) {
+          return;
+        }
+        const current = downloads[0];
+        if (current?.state === "complete") {
+          resolveDownload();
+        } else if (current?.state === "interrupted") {
+          rejectDownload(new Error(current.error || "download interrupted"));
+        }
+      })
+      .catch((error) => {
+        rejectDownload(error);
+      });
   });
 }
 
@@ -340,7 +384,12 @@ async function processTask(baseUrl, task) {
     method: "POST",
     body: JSON.stringify({})
   });
-  await setStatus({ state: "下载中", message: `${task.sku} · ${task.source_type}` });
+  await setStatus({
+    state: "下载中",
+    message: `${task.sku} · ${task.source_type}`,
+    currentSku: task.sku,
+    currentSourceType: task.source_type
+  });
   try {
     let token = await getDriveToken(false);
     if ((task.resource_kind === "folder" || task.resource_kind === "file") && !token && hasConfiguredOAuthClient()) {
@@ -361,6 +410,7 @@ async function processTask(baseUrl, task) {
     const state = await chrome.storage.local.get({ done: 0 });
     await setStatus({ done: Number(state.done || 0) + 1, message: `完成 ${task.sku}` });
   } catch (error) {
+    const failureReason = errorMessage(error);
     const partialFiles = Array.isArray(error.partialFiles) ? error.partialFiles : [];
     const partialImageCount = Number(error.partialImageCount || partialFiles.length || 0);
     await apiFetch(baseUrl, `/api/extension/download-items/${task.download_item_id}/failure`, {
@@ -368,14 +418,26 @@ async function processTask(baseUrl, task) {
       body: JSON.stringify({
         error_code: "extension_download_failed",
         error_message: "浏览器插件下载失败。",
-        error_detail: errorMessage(error),
+        error_detail: failureReason,
         files: partialFiles,
         partial_image_count: partialImageCount
       })
     });
     const state = await chrome.storage.local.get({ failed: 0 });
-    await setStatus({ failed: Number(state.failed || 0) + 1, message: `失败 ${task.sku}: ${String(error.message || error).slice(0, 120)}` });
+    await setStatus({
+      failed: Number(state.failed || 0) + 1,
+      message: `失败 ${task.sku}: ${failureReason.slice(0, 120)}`,
+      lastFailureSku: task.sku,
+      lastFailureReason: failureReason
+    });
+  } finally {
+    await setStatus({ currentSku: "", currentSourceType: "" });
   }
+}
+
+async function incrementProcessedCount() {
+  const state = await chrome.storage.local.get({ processed: 0 });
+  await setStatus({ processed: Number(state.processed || 0) + 1 });
 }
 
 async function runQueue() {
@@ -385,7 +447,18 @@ async function runQueue() {
   workerRunning = true;
   paused = false;
   const attemptedIds = new Set();
-  await setStatus({ running: true, state: "运行中", done: 0, failed: 0, message: "正在连接 Web..." });
+  await setStatus({
+    running: true,
+    state: "运行中",
+    processed: 0,
+    done: 0,
+    failed: 0,
+    currentSku: "",
+    currentSourceType: "",
+    lastFailureSku: "",
+    lastFailureReason: "",
+    message: "正在连接 Web..."
+  });
   try {
     while (!paused) {
       const config = await getConfig();
@@ -407,14 +480,21 @@ async function runQueue() {
         }
         attemptedIds.add(task.download_item_id);
         await processTask(config.baseUrl, task);
+        await incrementProcessedCount();
         await sleep(randomDelayMs());
       }
     }
   } catch (error) {
-    await setStatus({ state: "错误", message: String(error.message || error) });
+    await setStatus({
+      state: "错误",
+      currentSku: "",
+      currentSourceType: "",
+      lastFailureReason: errorMessage(error),
+      message: String(error.message || error)
+    });
   } finally {
     workerRunning = false;
-    await setStatus({ running: false });
+    await setStatus({ running: false, currentSku: "", currentSourceType: "" });
   }
 }
 

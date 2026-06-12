@@ -3,7 +3,7 @@ body {
   font-family: Arial, "Microsoft YaHei", sans-serif;
   font-size: 14px;
   margin: 0;
-  width: 340px;
+  width: 360px;
 }
 
 main {
@@ -59,11 +59,12 @@ button#pause {
 .status-panel {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   margin-top: 12px;
 }
 
-.status-panel div {
+.status-panel div,
+.detail-panel div {
   background: #f6f7f9;
   border: 1px solid #d8dde6;
   border-radius: 6px;
@@ -80,6 +81,30 @@ button#pause {
 
 .status-panel label {
   margin: 3px 0 0;
+}
+
+.detail-panel {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.detail-panel label {
+  margin: 0 0 4px;
+}
+
+.detail-panel span {
+  display: block;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.retry-note {
+  background: #fff7e6;
+  border: 1px solid #f0cf8a;
+  border-radius: 6px;
+  color: #684400;
+  padding: 8px;
 }
 
 p {

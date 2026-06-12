@@ -10,7 +10,7 @@
     <main>
       <h1>插件下载</h1>
       <label for="baseUrl">Web 地址</label>
-      <input id="baseUrl" type="url" value="http://localhost:8000">
+      <input id="baseUrl" type="url" value="https://dev.waysing.cn">
       <label for="batchId">批次 ID</label>
       <input id="batchId" type="number" min="1" placeholder="例如 12">
       <div class="actions">
@@ -19,9 +19,21 @@
       </div>
       <section class="status-panel">
         <div><span id="state">未连接</span><label>状态</label></div>
+        <div><span id="processed">0</span><label>本轮已处理</label></div>
         <div><span id="done">0</span><label>成功</label></div>
         <div><span id="failed">0</span><label>失败</label></div>
       </section>
+      <section class="detail-panel">
+        <div>
+          <label>当前下载 SKU</label>
+          <span id="currentSku">-</span>
+        </div>
+        <div>
+          <label>上一次失败原因</label>
+          <span id="lastFailure">-</span>
+        </div>
+      </section>
+      <p class="retry-note">下载失败时不要点 Chrome 下载栏里的继续，请回到 Web 批次页点击重试。</p>
       <p id="message"></p>
     </main>
     <script src="popup.js"></script>
