@@ -769,3 +769,31 @@ select {
   margin-top: 12px;
   padding: 10px 12px;
 }
+
+.fallback-panel {
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 20px;
+  padding: 12px 14px;
+}
+
+.fallback-panel summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.fallback-panel p {
+  font-size: 14px;
+  margin-top: 8px;
+}
+
+.fallback-actions,
+.fallback-actions form {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 0;
+}

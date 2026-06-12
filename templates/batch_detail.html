@@ -77,15 +77,6 @@
     <p>{{ batch.file_name }} · {{ status_badge(batch.status) }}</p>
   </div>
   <div class="actions">
-    <form method="post" action="/batches/{{ batch.id }}/start-download">
-      <button class="button subtle" type="submit" name="limit" value="10" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>备用服务器下载 10 项</button>
-      <button class="button subtle" type="submit" name="limit" value="20" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>备用服务器下载 20 项</button>
-      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>备用服务器继续全部</button>
-    </form>
-    <form method="post" action="/batches/{{ batch.id }}/retry-failed">
-      <button class="button subtle" type="submit" name="limit" value="10" {% if batch.failed_count == 0 or batch.status == "downloading" %}disabled{% endif %}>备用重试 10 个失败项</button>
-      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.failed_count == 0 or batch.status == "downloading" %}disabled{% endif %}>备用重试全部失败项</button>
-    </form>
     {% if batch_archive_ready %}
     <a class="button subtle" href="/batches/{{ batch.id }}/download.zip">一键下载全部订单</a>
     {% else %}
@@ -158,6 +149,24 @@
   </div>
   <p class="extension-note">失败项请在本批次页重试，不要点 Chrome 下载栏继续。</p>
 </section>
+
+{% if current_user.role == "admin" %}
+<details class="fallback-panel">
+  <summary>管理员应急：服务器备用下载</summary>
+  <p>仅在插件不可用或需要应急处理时使用。服务器下载更容易遇到 Google Drive 限流，普通操作员默认不使用。</p>
+  <div class="fallback-actions">
+    <form method="post" action="/batches/{{ batch.id }}/start-download">
+      <button class="button subtle" type="submit" name="limit" value="10" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>服务器下载 10 项</button>
+      <button class="button subtle" type="submit" name="limit" value="20" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>服务器下载 20 项</button>
+      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>服务器继续全部</button>
+    </form>
+    <form method="post" action="/batches/{{ batch.id }}/retry-failed">
+      <button class="button subtle" type="submit" name="limit" value="10" {% if batch.failed_count == 0 or batch.status == "downloading" %}disabled{% endif %}>服务器重试 10 个失败项</button>
+      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.failed_count == 0 or batch.status == "downloading" %}disabled{% endif %}>服务器重试全部失败项</button>
+    </form>
+  </div>
+</details>
+{% endif %}
 
 <script>
   (function () {
