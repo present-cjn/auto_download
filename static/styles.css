@@ -751,11 +751,13 @@ select {
   border-radius: 6px;
   color: var(--text);
   padding: 6px 8px;
+  white-space: nowrap;
 }
 
 .extension-copy span {
   color: var(--muted);
   font-size: 14px;
+  overflow-wrap: anywhere;
 }
 
 .extension-note {

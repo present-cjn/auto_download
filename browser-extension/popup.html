@@ -8,11 +8,16 @@
   </head>
   <body>
     <main>
-      <h1>插件下载</h1>
-      <label for="baseUrl">Web 地址</label>
-      <input id="baseUrl" type="url" value="https://dev.waysing.cn">
-      <label for="batchId">批次 ID</label>
-      <input id="batchId" type="number" min="1" placeholder="例如 12">
+      <header class="popup-header">
+        <h1>订单图片下载</h1>
+        <span id="stateBadge">未连接</span>
+      </header>
+      <section class="config-panel">
+        <label for="baseUrl">Web 地址</label>
+        <input id="baseUrl" type="url" value="https://dev.waysing.cn">
+        <label for="batchId">批次 ID</label>
+        <input id="batchId" type="number" min="1" placeholder="例如 12">
+      </section>
       <div class="actions">
         <button id="start" type="button">开始</button>
         <button id="pause" type="button">暂停</button>
@@ -26,14 +31,14 @@
       <section class="detail-panel">
         <div>
           <label>当前下载 SKU</label>
-          <span id="currentSku">-</span>
+          <span id="currentSku">当前没有正在下载的 SKU</span>
         </div>
         <div>
           <label>上一次失败原因</label>
-          <span id="lastFailure">-</span>
+          <span id="lastFailure">本轮暂无失败记录</span>
         </div>
       </section>
-      <p class="retry-note">下载失败时不要点 Chrome 下载栏里的继续，请回到 Web 批次页点击重试。</p>
+      <p class="retry-note">失败项请回到 Web 批次页重试，不要点 Chrome 下载栏继续。</p>
       <p id="message"></p>
     </main>
     <script src="popup.js"></script>

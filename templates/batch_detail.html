@@ -127,7 +127,7 @@
 <section class="extension-panel">
   <div class="section-heading">
     <h2>插件下载</h2>
-    <p>浏览器插件会读取当前批次的待下载项，并将图片保存到本机 Downloads/auto-download/batch-{{ batch.id }}/SKU/。</p>
+    <p>当前使用浏览器插件下载到本机，文件会保存到 Downloads/auto-download/batch-{{ batch.id }}/SKU/。</p>
   </div>
   <div class="extension-grid">
     <div><span>#{{ batch.id }}</span><label>当前批次 ID</label></div>
@@ -144,9 +144,19 @@
       data-batch-id="{{ batch.id }}"
       {% if batch.status == "downloading" or batch.status == "needs_fix" or (status_counts.pending + status_counts.failed) == 0 %}disabled{% endif %}
     >用插件下载待处理项</button>
-    <span id="extension-start-status">插件会复用当前登录会话，只下载你有权限访问的批次。</span>
+    <span id="extension-start-status">
+      {% if batch.status == "needs_fix" %}
+        导入预检未通过，修正后才能启动插件。
+      {% elif batch.status == "downloading" %}
+        当前已有下载处理中，请等待完成后刷新页面。
+      {% elif (status_counts.pending + status_counts.failed) == 0 %}
+        当前没有待插件处理的下载项。
+      {% else %}
+        插件会复用当前登录会话，只下载你有权限访问的批次。
+      {% endif %}
+    </span>
   </div>
-  <p class="extension-note">如果某个文件下载失败，不要点击 Chrome 下载栏里的继续。请回到本批次页查看失败原因，并对失败项执行重试。</p>
+  <p class="extension-note">失败项请在本批次页重试，不要点 Chrome 下载栏继续。</p>
 </section>
 
 <script>
@@ -161,7 +171,9 @@
       if (event.source !== window || !event.data || event.data.type !== "autoDownloadExtensionAck") {
         return;
       }
+      button.disabled = false;
       if (event.data.ok) {
+        button.disabled = true;
         status.textContent = "已发送到插件，插件会在后台下载并更新本页状态。";
       } else {
         status.textContent = "插件启动失败：" + (event.data.error || "未知错误");
@@ -169,6 +181,7 @@
     });
 
     button.addEventListener("click", function () {
+      button.disabled = true;
       status.textContent = "正在唤起插件...";
       window.postMessage({
         type: "autoDownloadExtensionStart",
@@ -177,6 +190,7 @@
       }, window.location.origin);
       window.setTimeout(function () {
         if (status.textContent === "正在唤起插件...") {
+          button.disabled = false;
           status.textContent = "未检测到插件响应，请确认已安装并启用浏览器插件。";
         }
       }, 2500);

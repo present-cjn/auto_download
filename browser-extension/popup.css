@@ -10,9 +10,48 @@ main {
   padding: 14px;
 }
 
+.popup-header {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
 h1 {
   font-size: 18px;
-  margin: 0 0 12px;
+  margin: 0;
+}
+
+#stateBadge {
+  background: #eef2f7;
+  border: 1px solid #d8dde6;
+  border-radius: 999px;
+  color: #657084;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 6px 8px;
+  white-space: nowrap;
+}
+
+#stateBadge[data-state="运行中"] {
+  background: #e8f5ec;
+  border-color: #b8dfc2;
+  color: #137333;
+}
+
+#stateBadge[data-state="错误"] {
+  background: #fdeceb;
+  border-color: #f4b6b0;
+  color: #b42318;
+}
+
+.config-panel {
+  background: #f8fafc;
+  border: 1px solid #d8dde6;
+  border-radius: 6px;
+  padding: 10px;
 }
 
 label {
@@ -50,6 +89,11 @@ button {
   height: 36px;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 button#pause {
   background: #ffffff;
   color: #172033;
@@ -74,6 +118,7 @@ button#pause {
 .status-panel span {
   display: block;
   font-weight: 700;
+  min-height: 18px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -96,6 +141,7 @@ button#pause {
 .detail-panel span {
   display: block;
   line-height: 1.4;
+  min-height: 20px;
   overflow-wrap: anywhere;
 }
 
