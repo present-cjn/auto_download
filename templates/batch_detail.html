@@ -147,6 +147,15 @@
       {% endif %}
     </span>
   </div>
+  <div class="extension-copy">
+    <button
+      class="button danger"
+      id="extension-stop"
+      type="button"
+      {% if batch.status != "downloading" and status_counts.downloading == 0 %}disabled{% endif %}
+    >停止插件下载</button>
+    <span id="extension-stop-status">停止后，当前项会标记失败；请回到 Web 批次页重试，不要点 Chrome 下载栏继续。</span>
+  </div>
   <p class="extension-note">失败项请在本批次页重试，不要点 Chrome 下载栏继续。</p>
 </section>
 
@@ -171,8 +180,10 @@
 <script>
   (function () {
     var button = document.getElementById("extension-start");
+    var stopButton = document.getElementById("extension-stop");
     var status = document.getElementById("extension-start-status");
-    if (!button || !status) {
+    var stopStatus = document.getElementById("extension-stop-status");
+    if (!button || !stopButton || !status || !stopStatus) {
       return;
     }
 
@@ -180,12 +191,24 @@
       if (event.source !== window || !event.data || event.data.type !== "autoDownloadExtensionAck") {
         return;
       }
-      button.disabled = false;
-      if (event.data.ok) {
-        button.disabled = true;
-        status.textContent = "已发送到插件，插件会在后台下载并更新本页状态。";
+      if (event.data.action === "stop") {
+        stopButton.disabled = false;
+        if (event.data.ok) {
+          stopButton.disabled = true;
+          button.disabled = false;
+          stopStatus.textContent = "已通知插件停止，当前项会标记失败；请稍后刷新页面后重试失败项。";
+        } else {
+          stopStatus.textContent = "插件停止失败：" + (event.data.error || "未知错误");
+        }
       } else {
-        status.textContent = "插件启动失败：" + (event.data.error || "未知错误");
+        button.disabled = false;
+        if (event.data.ok) {
+          button.disabled = true;
+          stopButton.disabled = false;
+          status.textContent = "已发送到插件，插件会在后台下载并更新本页状态。";
+        } else {
+          status.textContent = "插件启动失败：" + (event.data.error || "未知错误");
+        }
       }
     });
 
@@ -201,6 +224,20 @@
         if (status.textContent === "正在唤起插件...") {
           button.disabled = false;
           status.textContent = "未检测到插件响应，请确认已安装并启用浏览器插件。";
+        }
+      }, 2500);
+    });
+
+    stopButton.addEventListener("click", function () {
+      stopButton.disabled = true;
+      stopStatus.textContent = "正在通知插件停止...";
+      window.postMessage({
+        type: "autoDownloadExtensionStop"
+      }, window.location.origin);
+      window.setTimeout(function () {
+        if (stopStatus.textContent === "正在通知插件停止...") {
+          stopButton.disabled = false;
+          stopStatus.textContent = "未检测到插件响应，请确认已安装并启用浏览器插件。";
         }
       }, 2500);
     });

@@ -4,6 +4,7 @@ const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const IMAGE_MIME_PREFIX = "image/";
 const DOWNLOAD_RETRY_DELAYS_MS = [3000, 8000, 15000];
 const DOWNLOAD_WAIT_TIMEOUT_MS = 30 * 60 * 1000;
+const DOWNLOAD_POLL_INTERVAL_MS = 1000;
 const RETRIABLE_DOWNLOAD_ERRORS = new Set([
   "NETWORK_FAILED",
   "NETWORK_TIMEOUT",
@@ -13,10 +14,22 @@ const RETRIABLE_DOWNLOAD_ERRORS = new Set([
 ]);
 let activeDownloadResolvers = new Map();
 let workerRunning = false;
-let paused = false;
+let stopRequested = false;
+let activeDownloadId = null;
+let currentTask = null;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function interruptibleSleep(ms) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < ms) {
+    if (stopRequested) {
+      throw createStopError(currentTask);
+    }
+    await sleep(Math.min(250, ms - (Date.now() - startedAt)));
+  }
 }
 
 function randomDelayMs() {
@@ -36,6 +49,37 @@ function joinDownloadPath(folder, filename) {
 
 function errorMessage(error) {
   return String(error && error.message ? error.message : error || "unknown error");
+}
+
+function createStopError(task = currentTask, file = {}, partialFiles = []) {
+  const parts = ["用户停止了插件下载。"];
+  if (task) {
+    parts.push(`sku=${task.sku}`);
+    parts.push(`source_type=${task.source_type}`);
+    parts.push(`download_item_id=${task.download_item_id}`);
+  }
+  if (file && (file.id || file.name)) {
+    parts.push(`drive_file_id=${file.id || ""}`);
+    parts.push(`drive_file_name=${file.name || ""}`);
+  }
+  parts.push(`partial_image_count=${partialFiles.length}`);
+  const error = new Error(parts.join(" "));
+  error.errorCode = "extension_stopped_by_user";
+  error.errorMessage = "用户停止了插件下载。";
+  error.userStopped = true;
+  error.partialFiles = partialFiles;
+  error.partialImageCount = partialFiles.length;
+  return error;
+}
+
+function isStopError(error) {
+  return Boolean(stopRequested || error?.userStopped || error?.errorCode === "extension_stopped_by_user");
+}
+
+function assertNotStopped(task = currentTask, file = {}, partialFiles = []) {
+  if (stopRequested) {
+    throw createStopError(task, file, partialFiles);
+  }
 }
 
 function isRetriableDownloadError(error) {
@@ -66,6 +110,8 @@ function buildDownloadFailureDetail(task, file, filename, attempt, maxAttempts, 
 function enrichDownloadError(error, task, file, filename, attempt, maxAttempts) {
   const detail = buildDownloadFailureDetail(task, file, filename, attempt, maxAttempts, error);
   const enriched = new Error(detail);
+  enriched.errorCode = error?.errorCode || "extension_download_failed";
+  enriched.errorMessage = error?.errorMessage || "浏览器插件下载失败。";
   enriched.chromeError = errorMessage(error);
   enriched.driveFileId = file.id || "";
   enriched.driveFileName = file.name || "";
@@ -163,13 +209,51 @@ function googleDriveDownloadUrl(fileId) {
   return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`;
 }
 
-function assertImageDownload(downloadItem, label) {
+function isImageMetadata(file) {
+  return String(file?.mimeType || "").toLowerCase().startsWith(IMAGE_MIME_PREFIX);
+}
+
+function downloadLooksHtml(downloadItem) {
   const mime = String(downloadItem?.mime || "").toLowerCase();
-  if (!mime || mime === "application/octet-stream") {
+  const filename = String(downloadItem?.filename || "").toLowerCase();
+  return mime.includes("html") || filename.endsWith(".html") || filename.endsWith(".htm");
+}
+
+async function cleanupBadDownload(downloadItem) {
+  if (!downloadItem?.id) {
+    return;
+  }
+  try {
+    await chrome.downloads.removeFile(downloadItem.id);
+  } catch (error) {
+    // The file may already be gone or Chrome may not expose a local path yet.
+  }
+  try {
+    await chrome.downloads.erase({ id: downloadItem.id });
+  } catch (error) {
+    // Download history cleanup is best-effort only.
+  }
+}
+
+async function assertImageDownload(downloadItem, file, label) {
+  const mime = String(downloadItem?.mime || "").toLowerCase();
+  const metadataIsImage = isImageMetadata(file);
+  if ((!mime || mime === "application/octet-stream") && !downloadLooksHtml(downloadItem)) {
     return;
   }
   if (!mime.startsWith("image/")) {
-    throw new Error(`${label} 下载结果不是图片，浏览器收到的类型是 ${mime}。这通常表示下载到了 Google Drive 预览页或权限提示页。`);
+    await cleanupBadDownload(downloadItem);
+    const error = new Error(`${label} 下载结果不是图片，浏览器收到的类型是 ${mime || "unknown"}。这通常表示下载到了 Google Drive 预览页或权限提示页。失败项请回到 Web 批次页重试，不要点 Chrome 下载栏继续。`);
+    error.errorCode = "extension_non_image_download";
+    error.errorMessage = "插件下载到了非图片文件。";
+    throw error;
+  }
+  if (!metadataIsImage && downloadLooksHtml(downloadItem)) {
+    await cleanupBadDownload(downloadItem);
+    const error = new Error(`${label} 下载到了 HTML 文件。这通常表示 Google Drive 返回了预览页、权限页或确认页。失败项请回到 Web 批次页重试，不要点 Chrome 下载栏继续。`);
+    error.errorCode = "extension_non_image_download";
+    error.errorMessage = "插件下载到了非图片文件。";
+    throw error;
   }
 }
 
@@ -201,12 +285,25 @@ async function listFolderImages(folderId, token) {
 
 function waitForDownload(downloadId) {
   return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      const resolver = activeDownloadResolvers.get(downloadId);
+      if (resolver?.timeoutId) {
+        clearTimeout(resolver.timeoutId);
+      }
+      if (resolver?.pollId) {
+        clearInterval(resolver.pollId);
+      }
+      activeDownloadResolvers.delete(downloadId);
+      if (activeDownloadId === downloadId) {
+        activeDownloadId = null;
+      }
+    };
     const resolveDownload = () => {
       const resolver = activeDownloadResolvers.get(downloadId);
       if (!resolver) {
         return;
       }
-      activeDownloadResolvers.delete(downloadId);
+      cleanup();
       resolver.resolve();
     };
     const rejectDownload = (error) => {
@@ -214,35 +311,63 @@ function waitForDownload(downloadId) {
       if (!resolver) {
         return;
       }
-      activeDownloadResolvers.delete(downloadId);
+      cleanup();
       resolver.reject(error);
+    };
+
+    const inspectDownload = (current) => {
+      if (stopRequested) {
+        rejectDownload(createStopError(currentTask));
+        return;
+      }
+      if (!current) {
+        rejectDownload(new Error("Chrome 下载记录不存在，下载可能已被浏览器或用户取消。"));
+        return;
+      }
+      if (current.state === "complete") {
+        resolveDownload();
+        return;
+      }
+      if (current.state === "interrupted") {
+        rejectDownload(new Error(current.error || "download interrupted"));
+        return;
+      }
+      if (current.paused) {
+        rejectDownload(new Error("Chrome 下载已暂停或需要在下载栏继续。请不要点 Chrome 下载栏继续，请回到 Web 重试。"));
+        return;
+      }
+      if (current.danger && current.danger !== "safe" && current.danger !== "accepted") {
+        rejectDownload(new Error(`Chrome 阻止或标记了下载：${current.danger}。请回到 Web 重试。`));
+        return;
+      }
+      if (current.exists === false) {
+        rejectDownload(new Error("Chrome 下载文件不存在，可能已被删除或拦截。"));
+      }
+    };
+    const pollDownload = () => {
+      chrome.downloads.search({ id: downloadId })
+        .then((downloads) => {
+          if (!activeDownloadResolvers.has(downloadId)) {
+            return;
+          }
+          inspectDownload(downloads[0]);
+        })
+        .catch((error) => {
+          rejectDownload(error);
+        });
     };
     const timeoutId = setTimeout(() => {
       rejectDownload(new Error(`download timeout after ${Math.round(DOWNLOAD_WAIT_TIMEOUT_MS / 60000)} minutes`));
     }, DOWNLOAD_WAIT_TIMEOUT_MS);
-    const settle = (callback) => (value) => {
-      clearTimeout(timeoutId);
-      callback(value);
-    };
+    const pollId = setInterval(pollDownload, DOWNLOAD_POLL_INTERVAL_MS);
+    activeDownloadId = downloadId;
     activeDownloadResolvers.set(downloadId, {
-      resolve: settle(resolve),
-      reject: settle(reject)
+      resolve,
+      reject,
+      timeoutId,
+      pollId
     });
-    chrome.downloads.search({ id: downloadId })
-      .then((downloads) => {
-        if (!activeDownloadResolvers.has(downloadId)) {
-          return;
-        }
-        const current = downloads[0];
-        if (current?.state === "complete") {
-          resolveDownload();
-        } else if (current?.state === "interrupted") {
-          rejectDownload(new Error(current.error || "download interrupted"));
-        }
-      })
-      .catch((error) => {
-        rejectDownload(error);
-      });
+    pollDownload();
   });
 }
 
@@ -252,15 +377,34 @@ chrome.downloads.onChanged.addListener((delta) => {
   }
   const resolver = activeDownloadResolvers.get(delta.id);
   if (delta.state.current === "complete") {
+    if (resolver?.timeoutId) {
+      clearTimeout(resolver.timeoutId);
+    }
+    if (resolver?.pollId) {
+      clearInterval(resolver.pollId);
+    }
     activeDownloadResolvers.delete(delta.id);
+    if (activeDownloadId === delta.id) {
+      activeDownloadId = null;
+    }
     resolver.resolve();
   } else if (delta.state.current === "interrupted") {
+    if (resolver?.timeoutId) {
+      clearTimeout(resolver.timeoutId);
+    }
+    if (resolver?.pollId) {
+      clearInterval(resolver.pollId);
+    }
     activeDownloadResolvers.delete(delta.id);
+    if (activeDownloadId === delta.id) {
+      activeDownloadId = null;
+    }
     resolver.reject(new Error(delta.error?.current || "download interrupted"));
   }
 });
 
 async function startBrowserDownload(options) {
+  assertNotStopped();
   const downloadId = await chrome.downloads.download({
     conflictAction: "uniquify",
     saveAs: false,
@@ -275,6 +419,7 @@ async function downloadWithRetry({ task, file, filename, downloadOptions }) {
   const maxAttempts = DOWNLOAD_RETRY_DELAYS_MS.length + 1;
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    assertNotStopped(task, file);
     const label = fileLabel(file);
     await setStatus({
       state: "下载中",
@@ -282,9 +427,12 @@ async function downloadWithRetry({ task, file, filename, downloadOptions }) {
     });
     try {
       const downloadItem = await startBrowserDownload(downloadOptions);
-      assertImageDownload(downloadItem, label);
+      await assertImageDownload(downloadItem, file, label);
       return downloadItem;
     } catch (error) {
+      if (isStopError(error)) {
+        throw createStopError(task, file);
+      }
       lastError = error;
       if (attempt < maxAttempts && isRetriableDownloadError(error)) {
         const waitMs = DOWNLOAD_RETRY_DELAYS_MS[attempt - 1];
@@ -292,7 +440,7 @@ async function downloadWithRetry({ task, file, filename, downloadOptions }) {
           state: "重试中",
           message: `${task.sku} · ${label} 下载中断：${errorMessage(error)}，${Math.round(waitMs / 1000)} 秒后重试`
         });
-        await sleep(waitMs);
+        await interruptibleSleep(waitMs);
         continue;
       }
       throw enrichDownloadError(error, task, file, filename, attempt, maxAttempts);
@@ -358,12 +506,13 @@ async function downloadFolder(task, token) {
   }
   const downloaded = [];
   for (const [index, file] of files.entries()) {
-    if (paused) {
-      throw new Error("用户暂停下载。 ");
-    }
+    assertNotStopped(task, file, downloaded);
     try {
       downloaded.push(await downloadDriveFileByApi(file, task, token));
     } catch (error) {
+      if (isStopError(error)) {
+        throw createStopError(task, file, downloaded);
+      }
       const detail = [
         errorMessage(error),
         `folder_file_index=${index + 1}/${files.length}`,
@@ -374,23 +523,31 @@ async function downloadFolder(task, token) {
       folderError.partialImageCount = downloaded.length;
       throw folderError;
     }
-    await sleep(randomDelayMs());
+    try {
+      await interruptibleSleep(randomDelayMs());
+    } catch (error) {
+      if (isStopError(error)) {
+        throw createStopError(task, file, downloaded);
+      }
+      throw error;
+    }
   }
   return downloaded;
 }
 
 async function processTask(baseUrl, task) {
-  await apiFetch(baseUrl, `/api/extension/download-items/${task.download_item_id}/start`, {
-    method: "POST",
-    body: JSON.stringify({})
-  });
-  await setStatus({
-    state: "下载中",
-    message: `${task.sku} · ${task.source_type}`,
-    currentSku: task.sku,
-    currentSourceType: task.source_type
-  });
+  currentTask = task;
   try {
+    await apiFetch(baseUrl, `/api/extension/download-items/${task.download_item_id}/start`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    await setStatus({
+      state: "下载中",
+      message: `${task.sku} · ${task.source_type}`,
+      currentSku: task.sku,
+      currentSourceType: task.source_type
+    });
     let token = await getDriveToken(false);
     if ((task.resource_kind === "folder" || task.resource_kind === "file") && !token && hasConfiguredOAuthClient()) {
       token = await getDriveToken(true);
@@ -411,13 +568,15 @@ async function processTask(baseUrl, task) {
     await setStatus({ done: Number(state.done || 0) + 1, message: `完成 ${task.sku}` });
   } catch (error) {
     const failureReason = errorMessage(error);
+    const errorCode = error?.errorCode || "extension_download_failed";
+    const errorSummary = error?.errorMessage || "浏览器插件下载失败。";
     const partialFiles = Array.isArray(error.partialFiles) ? error.partialFiles : [];
     const partialImageCount = Number(error.partialImageCount || partialFiles.length || 0);
     await apiFetch(baseUrl, `/api/extension/download-items/${task.download_item_id}/failure`, {
       method: "POST",
       body: JSON.stringify({
-        error_code: "extension_download_failed",
-        error_message: "浏览器插件下载失败。",
+        error_code: errorCode,
+        error_message: errorSummary,
         error_detail: failureReason,
         files: partialFiles,
         partial_image_count: partialImageCount
@@ -431,6 +590,7 @@ async function processTask(baseUrl, task) {
       lastFailureReason: failureReason
     });
   } finally {
+    currentTask = null;
     await setStatus({ currentSku: "", currentSourceType: "" });
   }
 }
@@ -440,12 +600,37 @@ async function incrementProcessedCount() {
   await setStatus({ processed: Number(state.processed || 0) + 1 });
 }
 
+async function stopDownloads() {
+  stopRequested = true;
+  const downloadId = activeDownloadId;
+  if (downloadId) {
+    try {
+      await chrome.downloads.cancel(downloadId);
+    } catch (error) {
+      // The download may have completed or disappeared between polling ticks.
+    }
+  }
+  if (!workerRunning) {
+    await setStatus({
+      running: false,
+      state: "已停止",
+      message: "当前没有正在运行的插件下载。"
+    });
+    return;
+  }
+  await setStatus({
+    running: true,
+    state: "正在停止",
+    message: "正在停止插件下载，当前下载会取消并回到 Web 重试。"
+  });
+}
+
 async function runQueue() {
   if (workerRunning) {
     return;
   }
   workerRunning = true;
-  paused = false;
+  stopRequested = false;
   const attemptedIds = new Set();
   await setStatus({
     running: true,
@@ -460,7 +645,7 @@ async function runQueue() {
     message: "正在连接 Web..."
   });
   try {
-    while (!paused) {
+    while (!stopRequested) {
       const config = await getConfig();
       if (!config.baseUrl || !config.batchId) {
         throw new Error("请填写 Web 地址和批次 ID。 ");
@@ -475,14 +660,27 @@ async function runQueue() {
         break;
       }
       for (const task of items) {
-        if (paused) {
+        if (stopRequested) {
           break;
         }
         attemptedIds.add(task.download_item_id);
         await processTask(config.baseUrl, task);
         await incrementProcessedCount();
-        await sleep(randomDelayMs());
+        if (stopRequested) {
+          break;
+        }
+        try {
+          await interruptibleSleep(randomDelayMs());
+        } catch (error) {
+          if (isStopError(error)) {
+            break;
+          }
+          throw error;
+        }
       }
+    }
+    if (stopRequested) {
+      await setStatus({ state: "已停止", message: "已停止插件下载，失败项请回到 Web 批次页重试。" });
     }
   } catch (error) {
     await setStatus({
@@ -519,9 +717,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message.type === "pause") {
-    paused = true;
-    setStatus({ running: false, state: "已暂停", message: "已暂停，当前下载完成后停止。" });
-    sendResponse({ ok: true });
+    stopDownloads()
+      .then(() => {
+        sendResponse({ ok: true });
+      })
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error: String(error && error.message ? error.message : error)
+        });
+      });
+    return true;
+  }
+  if (message.type === "stop") {
+    stopDownloads()
+      .then(() => {
+        sendResponse({ ok: true });
+      })
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error: String(error && error.message ? error.message : error)
+        });
+      });
     return true;
   }
   return false;

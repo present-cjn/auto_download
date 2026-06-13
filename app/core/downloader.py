@@ -68,6 +68,8 @@ ERROR_LABELS = {
     "download_timeout": "下载超时",
     "no_images_found": "未找到图片",
     "extension_download_failed": "插件下载失败",
+    "extension_stopped_by_user": "用户停止插件下载",
+    "extension_non_image_download": "插件下载到非图片",
     "interrupted": "任务中断",
     "unknown_error": "未知错误",
 }
@@ -83,7 +85,7 @@ def parse_drive_resource(url: str) -> DriveResource:
     if not is_google_drive_url(url):
         raise ValueError("不是 Google Drive 链接")
 
-    folder_match = re.search(r"/drive/folders/([^/?#]+)", parsed.path)
+    folder_match = re.search(r"/drive/(?:u/\d+/)?folders/([^/?#]+)", parsed.path)
     if folder_match:
         return DriveResource("folder", folder_match.group(1))
 

@@ -15,7 +15,7 @@ For the full internal testing workflow, server commands, OAuth setup, and troubl
 5. Open a batch detail page.
 6. Click `用插件下载待处理项`.
 
-The extension popup can still be used to view status, pause the current run, or manually enter a Web address and batch ID for debugging.
+The extension popup can still be used to view status, stop the current run, or manually enter a Web address and batch ID for debugging.
 
 ## Google Drive folders
 
@@ -53,6 +53,10 @@ target path, attempt count, and Chrome download error.
 If Chrome leaves an orphaned Drive-ID file directly in Downloads after an
 interrupted download, ignore or delete that orphan. The official output is only
 the file saved under `auto-download/batch-<batch_id>/<sku>/`.
+
+If Chrome downloads an HTML page or another non-image file, the extension deletes
+that bad local file and marks the item as failed. Retry failed items from the Web
+batch page; do not click continue in Chrome's download bar.
 
 ## Web permissions
 

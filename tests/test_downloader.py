@@ -24,10 +24,12 @@ from app.core.downloader import (
 
 def test_drive_url_detection_and_folder_id() -> None:
     url = "https://drive.google.com/drive/folders/abc123?usp=sharing&hl=en"
+    profile_url = "https://drive.google.com/drive/u/0/folders/profileFolder123"
 
     assert is_google_drive_url(url)
     assert not is_google_drive_url("https://example.com/drive/folders/abc123")
     assert extract_drive_folder_id(url) == "abc123"
+    assert extract_drive_folder_id(profile_url) == "profileFolder123"
 
 
 def test_drive_resource_parses_folder_and_file_ids() -> None:

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.core import database as db
+from app.core.downloader import ERROR_LABELS
 from app.core.excel_parser import OrderItemRow
 from app.core.security import hash_password, new_session_token, session_expiry_string
 from app.main import (
@@ -187,3 +188,33 @@ def test_extension_download_items_prioritize_pending_before_failed(tmp_path: Pat
         assert reordered[-1]["download_item_id"] == first_id
     finally:
         db.DB_PATH = original_path
+
+
+def test_extension_download_items_parse_profile_folder_urls(tmp_path: Path) -> None:
+    original_path, token, batch_id, _ = setup_extension_batch(tmp_path / "app.db")
+    try:
+        request = FakeRequest(token)
+        item = db.get_pending_download_items(batch_id)[0]
+        with db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE download_items
+                SET design_link = ?
+                WHERE id = ?
+                """,
+                (
+                    "https://drive.google.com/drive/u/0/folders/13h6YaJa8JlgmYZXlEG0HyGtwGF71wYkh",
+                    item["id"],
+                ),
+            )
+
+        payload = extension_download_items(request, batch_id)["items"][0]
+        assert payload["resource_kind"] == "folder"
+        assert payload["resource_id"] == "13h6YaJa8JlgmYZXlEG0HyGtwGF71wYkh"
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_extension_error_labels_include_stop_and_non_image_codes() -> None:
+    assert ERROR_LABELS["extension_stopped_by_user"] == "用户停止插件下载"
+    assert ERROR_LABELS["extension_non_image_download"] == "插件下载到非图片"

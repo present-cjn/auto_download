@@ -64,8 +64,8 @@ startButton.addEventListener("click", async () => {
 
 pauseButton.addEventListener("click", async () => {
   pauseButton.disabled = true;
-  messageEl.textContent = "正在暂停，当前文件完成后停止...";
-  await chrome.runtime.sendMessage({ type: "pause" });
+  messageEl.textContent = "正在停止，当前下载会取消并回到 Web 重试...";
+  await chrome.runtime.sendMessage({ type: "stop" });
   await loadState();
 });
 

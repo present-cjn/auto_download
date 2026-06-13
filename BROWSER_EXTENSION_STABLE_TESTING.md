@@ -113,7 +113,7 @@ https://dev.waysing.cn
 4. 打开批次详情页。
 5. 点击 `用插件下载待处理项`。
 6. 首次下载 Drive folder 时完成 Google 授权。
-7. 打开插件 popup 或 service worker console 观察状态。
+7. 打开插件 popup 或 service worker console 观察状态；如需中断，优先点击 Web 批次页或 popup 的停止按钮。
 8. 检查本机 Downloads：
 
 ```text
@@ -131,6 +131,8 @@ Downloads/auto-download/batch-<batch_id>/<sku>/
 - 失败项可以再次点击插件下载进行重试。
 - `NETWORK_FAILED` 等临时下载错误会自动重试。
 - Web 失败详情能显示具体 SKU、来源、Drive file id、目标路径和 Chrome 错误。
+- 点击停止后，当前下载项会标记失败，并可从 Web 批次页重试。
+- 如果 Chrome 下载到 HTML 或非图片文件，插件会删除错误文件并标记失败。
 - 正式输出只看 SKU 目录，不依赖 Downloads 根目录的孤立文件。
 
 ## 常见问题
@@ -196,6 +198,21 @@ sudo systemctl restart auto-download
 Downloads/auto-download/batch-<batch_id>/<sku>/
 ```
 
+### 下载到 HTML 或 Chrome 下载栏显示继续
+
+不要点击 Chrome 下载栏里的继续。插件会把 HTML、预览页、权限页或需要人工继续的下载标记为失败，并提示回到 Web 批次页重试。
+
+当前支持的 Drive 文件夹链接包括：
+
+```text
+https://drive.google.com/drive/folders/<folder_id>
+https://drive.google.com/drive/u/0/folders/<folder_id>
+```
+
+如果失败详情里 `drive_file_id=` 为空，并且文件名类似 `design-<id>-drive-file`，通常说明服务器没有把链接解析成 Drive folder/file。先确认服务器已更新到包含该链接解析修复的代码，再重试失败项。
+
+如果需要中断当前批次，点击 Web 批次页的 `停止插件下载` 或 popup 的 `停止`。当前下载项会标记失败，之后从 Web 批次页重试。
+
 ### 页面按钮没有唤起插件
 
 检查：
@@ -216,5 +233,5 @@ https://dev.waysing.cn
 ## 后续生产化任务
 
 - 收窄插件 `host_permissions` 到正式域名。
-- 评估 100+ 下载项连续运行和暂停恢复。
+- 评估 100+ 下载项连续运行和停止后重试。
 - 物流订单接入从合并后的 `master` 新开 feature 分支开发。
