@@ -70,6 +70,7 @@ ERROR_LABELS = {
     "extension_download_failed": "插件下载失败",
     "extension_stopped_by_user": "用户停止插件下载",
     "extension_non_image_download": "插件下载到非图片",
+    "extension_google_apps_file": "链接不是原始图片",
     "interrupted": "任务中断",
     "unknown_error": "未知错误",
 }

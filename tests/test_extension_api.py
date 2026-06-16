@@ -243,3 +243,4 @@ def test_extension_download_items_parse_open_id_urls(tmp_path: Path) -> None:
 def test_extension_error_labels_include_stop_and_non_image_codes() -> None:
     assert ERROR_LABELS["extension_stopped_by_user"] == "用户停止插件下载"
     assert ERROR_LABELS["extension_non_image_download"] == "插件下载到非图片"
+    assert ERROR_LABELS["extension_google_apps_file"] == "链接不是原始图片"

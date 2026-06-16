@@ -2,6 +2,8 @@ const SESSION_COOKIE = "app_session";
 const DEFAULT_BASE_URL = "https://dev.waysing.cn";
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const IMAGE_MIME_PREFIX = "image/";
+const GOOGLE_APPS_MIME_PREFIX = "application/vnd.google-apps.";
+const GOOGLE_APPS_FOLDER_MIME = "application/vnd.google-apps.folder";
 const DOWNLOAD_RETRY_DELAYS_MS = [3000, 8000, 15000];
 const DOWNLOAD_WAIT_TIMEOUT_MS = 30 * 60 * 1000;
 const DOWNLOAD_POLL_INTERVAL_MS = 1000;
@@ -100,6 +102,13 @@ function driveResourceCacheKey(task) {
     return "";
   }
   return `${task.resource_kind}:${task.resource_id}`;
+}
+
+function asFolderTask(task) {
+  return {
+    ...task,
+    resource_kind: "folder"
+  };
 }
 
 function buildDownloadFailureDetail(task, file, filename, attempt, maxAttempts, error) {
@@ -221,6 +230,14 @@ function isImageMetadata(file) {
   return String(file?.mimeType || "").toLowerCase().startsWith(IMAGE_MIME_PREFIX);
 }
 
+function isDriveFolderMetadata(file) {
+  return String(file?.mimeType || "").toLowerCase() === GOOGLE_APPS_FOLDER_MIME;
+}
+
+function isGoogleAppsMetadata(file) {
+  return String(file?.mimeType || "").toLowerCase().startsWith(GOOGLE_APPS_MIME_PREFIX);
+}
+
 function downloadLooksHtml(downloadItem) {
   const mime = String(downloadItem?.mime || "").toLowerCase();
   const filename = String(downloadItem?.filename || "").toLowerCase();
@@ -292,6 +309,15 @@ function nonImageDownloadError(label, mime) {
   const error = new Error(`${label} 下载结果不是图片，Drive API 返回的类型是 ${mime || "unknown"}。这通常表示权限页、预览页或非图片文件。失败项请回到 Web 批次页重试。`);
   error.errorCode = "extension_non_image_download";
   error.errorMessage = "插件下载到了非图片文件。";
+  return error;
+}
+
+function googleAppsFileError(file) {
+  const label = fileLabel(file);
+  const mime = file?.mimeType || "unknown";
+  const error = new Error(`${label} 不是可直接下载的图片文件。drive_file_id=${file?.id || ""} drive_file_name=${file?.name || ""} drive_file_mime_type=${mime}。这个链接指向 Google 文档/绘图/幻灯片/表格等在线文件，请改填原始图片文件链接，或包含图片文件的 Drive 文件夹链接。`);
+  error.errorCode = "extension_google_apps_file";
+  error.errorMessage = "链接指向 Google 在线文件，不是原始图片。";
   return error;
 }
 
@@ -563,12 +589,18 @@ async function downloadSingleFile(task, token) {
     let metadata = cacheKey ? driveResourceMetadataCache.get(cacheKey) : null;
     if (!metadata) {
       metadata = await driveFetchJson(
-        `https://www.googleapis.com/drive/v3/files/${task.resource_id}?fields=id,name,mimeType,size&supportsAllDrives=true`,
+        `https://www.googleapis.com/drive/v3/files/${task.resource_id}?fields=id,name,mimeType,size,webViewLink,exportLinks&supportsAllDrives=true`,
         token
       );
       if (cacheKey) {
         driveResourceMetadataCache.set(cacheKey, metadata);
       }
+    }
+    if (isDriveFolderMetadata(metadata)) {
+      return downloadFolder(asFolderTask(task), token);
+    }
+    if (isGoogleAppsMetadata(metadata)) {
+      throw googleAppsFileError(metadata);
     }
     return [await downloadDriveFileByApi(metadata, task, token)];
   }
