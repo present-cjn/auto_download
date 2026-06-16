@@ -35,17 +35,24 @@ def test_drive_url_detection_and_folder_id() -> None:
 def test_drive_resource_parses_folder_and_file_ids() -> None:
     folder = parse_drive_resource("https://drive.google.com/drive/folders/folder123?usp=sharing")
     file = parse_drive_resource("https://drive.google.com/file/d/file123/view?usp=sharing")
+    open_file = parse_drive_resource("https://drive.google.com/open?id=openFile123&usp=drive_copy")
+    uc_file = parse_drive_resource("https://drive.google.com/uc?id=ucFile123&export=download")
 
     assert folder.kind == "folder"
     assert folder.resource_id == "folder123"
     assert file.kind == "file"
     assert file.resource_id == "file123"
+    assert open_file.kind == "file"
+    assert open_file.resource_id == "openFile123"
+    assert uc_file.kind == "file"
+    assert uc_file.resource_id == "ucFile123"
     assert extract_drive_file_id("https://drive.google.com/file/d/file123/view") == "file123"
+    assert extract_drive_file_id("https://drive.google.com/open?id=openFile123&usp=drive_copy") == "openFile123"
 
 
 def test_drive_resource_rejects_unknown_drive_shape() -> None:
     try:
-        parse_drive_resource("https://drive.google.com/open?id=abc123")
+        parse_drive_resource("https://drive.google.com/open")
     except ValueError as exc:
         assert "文件夹或文件 ID" in str(exc)
     else:

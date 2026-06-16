@@ -91,7 +91,7 @@ Excel 是外部协作格式，系统内部使用稳定的数据结构。后续�
 - 每一行创建一条 `OrderItem`，保留 SKU、数量、规格、设计图链接等明细字段。
 - 同一 `订单号` 下可以有多条 SKU 明细，系统必须完整保留，不能因为订单号重复而丢行。
 - `Design Link` 创建 design 下载任务；`Mockup Link` 有值时创建 mockup 下载任务。
-- Google Drive 链接支持文件夹格式 `/drive/folders/<id>` 和单文件格式 `/file/d/<id>/view`。
+- Google Drive 链接支持文件夹格式 `/drive/folders/<id>`、`/drive/u/0/folders/<id>`，以及单文件格式 `/file/d/<id>/view`、`/open?id=<id>`、`/uc?id=<id>`。
 - 如果 `Design Link` 和 `Mockup Link` 下载出同名图片，系统用 `(1)` 后缀保留重复文件，避免漏下载。
 - 服务器备用下载中，同一批次内相同 Google Drive 资源会复用缓存，避免重复请求 Google Drive；浏览器插件会复用 Drive 元数据，但仍需为每个 SKU 实际保存文件。
 - 空字段默认不应覆盖已有关键业务字段，尤其是物流单号、地址、备注等需要保留历史判断的字段。

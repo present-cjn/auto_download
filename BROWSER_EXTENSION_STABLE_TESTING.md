@@ -209,6 +209,14 @@ https://drive.google.com/drive/folders/<folder_id>
 https://drive.google.com/drive/u/0/folders/<folder_id>
 ```
 
+当前支持的 Drive 单文件链接包括：
+
+```text
+https://drive.google.com/file/d/<file_id>/view
+https://drive.google.com/open?id=<file_id>
+https://drive.google.com/uc?id=<file_id>
+```
+
 如果失败详情里 `drive_file_id=` 为空，并且文件名类似 `design-<id>-drive-file`，通常说明服务器没有把链接解析成 Drive folder/file。先确认服务器已更新到包含该链接解析修复的代码，再重试失败项。
 
 如果需要中断当前批次，点击 Web 批次页的 `停止插件下载` 或 popup 的 `停止`。当前下载项会标记失败，之后从 Web 批次页重试。

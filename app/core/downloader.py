@@ -9,7 +9,7 @@ from multiprocessing import Process, Queue
 from pathlib import Path
 from queue import Empty
 from typing import Callable, Iterable, Literal, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 import os
 
 import requests
@@ -92,6 +92,10 @@ def parse_drive_resource(url: str) -> DriveResource:
     file_match = re.search(r"/file/d/([^/?#]+)", parsed.path)
     if file_match:
         return DriveResource("file", file_match.group(1))
+
+    query_id = parse_qs(parsed.query).get("id", [""])[0]
+    if query_id and parsed.path in {"/open", "/uc"}:
+        return DriveResource("file", query_id)
 
     raise ValueError("Google Drive 链接中没有找到文件夹或文件 ID")
 
