@@ -221,6 +221,8 @@ https://drive.google.com/uc?id=<file_id>
 
 如果失败详情是 `Drive API 404: 找不到文件`，但浏览器手动打开链接能看到图片，通常是插件 OAuth 授权的 Google 账号和能打开链接的 Google 账号不一致，或文件来自 `与我共享` / 共享云端硬盘。请在同一个 Chrome Profile 中确认当前 Google 账号能直接打开该链接；如果页面提示请求访问权限，代码无法绕过权限限制。
 
+如果失败详情是 `SERVER_FORBIDDEN` 或 Chrome 下载页提示 `无法从网站上提取文件`，通常说明插件仍在使用旧代码直接让 Chrome 下载 Google API media URL。更新服务器代码后，还必须在 `chrome://extensions` 对插件点击 Reload，再刷新 Web 批次页重试。
+
 如果需要中断当前批次，点击 Web 批次页的 `停止插件下载` 或 popup 的 `停止`。当前下载项会标记失败，之后从 Web 批次页重试。
 
 ### 页面按钮没有唤起插件

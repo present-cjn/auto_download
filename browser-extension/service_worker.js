@@ -288,6 +288,59 @@ function formatDriveApiError(status, text) {
   return `Drive API ${status}: ${detail}`;
 }
 
+function nonImageDownloadError(label, mime) {
+  const error = new Error(`${label} 下载结果不是图片，Drive API 返回的类型是 ${mime || "unknown"}。这通常表示权限页、预览页或非图片文件。失败项请回到 Web 批次页重试。`);
+  error.errorCode = "extension_non_image_download";
+  error.errorMessage = "插件下载到了非图片文件。";
+  return error;
+}
+
+async function blobToDownloadUrl(blob) {
+  if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+    const objectUrl = URL.createObjectURL(blob);
+    return {
+      url: objectUrl,
+      cleanup: () => URL.revokeObjectURL(objectUrl)
+    };
+  }
+
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  const mime = blob.type || "application/octet-stream";
+  return {
+    url: `data:${mime};base64,${btoa(binary)}`,
+    cleanup: () => {}
+  };
+}
+
+async function fetchDriveMediaAsDownloadUrl(file, token) {
+  const label = fileLabel(file);
+  const url = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`;
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(formatDriveApiError(response.status, text));
+  }
+
+  const mime = String(response.headers.get("Content-Type") || "").split(";")[0].toLowerCase();
+  const metadataIsImage = isImageMetadata(file);
+  if (mime.includes("html") || (mime && mime !== "application/octet-stream" && !mime.startsWith("image/"))) {
+    throw nonImageDownloadError(label, mime);
+  }
+  if (!metadataIsImage && !mime.startsWith("image/") && mime !== "application/octet-stream") {
+    throw nonImageDownloadError(label, mime);
+  }
+
+  return blobToDownloadUrl(await response.blob());
+}
+
 async function listFolderImages(folderId, token) {
   const query = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
   const fields = encodeURIComponent("nextPageToken,files(id,name,mimeType,size)");
@@ -435,7 +488,7 @@ async function startBrowserDownload(options) {
   return downloads[0] || { id: downloadId };
 }
 
-async function downloadWithRetry({ task, file, filename, downloadOptions }) {
+async function downloadWithRetry({ task, file, filename, downloadOptions, prepareDownloadOptions }) {
   const maxAttempts = DOWNLOAD_RETRY_DELAYS_MS.length + 1;
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -445,8 +498,15 @@ async function downloadWithRetry({ task, file, filename, downloadOptions }) {
       state: "下载中",
       message: `${task.sku} · ${task.source_type} · ${label} (${attempt}/${maxAttempts})`
     });
+    let currentDownloadOptions = downloadOptions;
+    let cleanupDownloadOptions = null;
     try {
-      const downloadItem = await startBrowserDownload(downloadOptions);
+      if (prepareDownloadOptions) {
+        const prepared = await prepareDownloadOptions();
+        cleanupDownloadOptions = prepared.cleanup || null;
+        currentDownloadOptions = prepared.downloadOptions;
+      }
+      const downloadItem = await startBrowserDownload(currentDownloadOptions);
       await assertImageDownload(downloadItem, file, label);
       return downloadItem;
     } catch (error) {
@@ -464,6 +524,10 @@ async function downloadWithRetry({ task, file, filename, downloadOptions }) {
         continue;
       }
       throw enrichDownloadError(error, task, file, filename, attempt, maxAttempts);
+    } finally {
+      if (cleanupDownloadOptions) {
+        cleanupDownloadOptions();
+      }
     }
   }
   throw enrichDownloadError(lastError, task, file, filename, maxAttempts, maxAttempts);
@@ -478,10 +542,12 @@ async function downloadDriveFileByApi(file, task, token) {
     task,
     file,
     filename,
-    downloadOptions: {
-      url: `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`,
-      filename,
-      headers: [{ name: "Authorization", value: `Bearer ${token}` }]
+    prepareDownloadOptions: async () => {
+      const prepared = await fetchDriveMediaAsDownloadUrl(file, token);
+      return {
+        downloadOptions: { url: prepared.url, filename },
+        cleanup: prepared.cleanup
+      };
     }
   });
   return {
