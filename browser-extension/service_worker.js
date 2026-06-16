@@ -17,6 +17,7 @@ const RETRIABLE_DOWNLOAD_ERRORS = new Set([
 let activeDownloadResolvers = new Map();
 let workerRunning = false;
 let stopRequested = false;
+let stopInProgress = false;
 let activeDownloadId = null;
 let currentTask = null;
 let driveResourceMetadataCache = new Map();
@@ -140,6 +141,30 @@ function enrichDownloadError(error, task, file, filename, attempt, maxAttempts) 
 
 async function setStatus(patch) {
   await chrome.storage.local.set(patch);
+}
+
+async function getRuntimeState() {
+  const state = await chrome.storage.local.get({
+    baseUrl: DEFAULT_BASE_URL,
+    batchId: "",
+    running: false,
+    stopping: false,
+    processed: 0,
+    done: 0,
+    failed: 0,
+    currentSku: "",
+    currentSourceType: "",
+    lastFailureSku: "",
+    lastFailureReason: "",
+    message: "",
+    state: "未连接"
+  });
+  return {
+    ...state,
+    running: Boolean(workerRunning || state.running),
+    stopping: Boolean(stopInProgress || state.stopping),
+    activeDownloadId
+  };
 }
 
 async function getConfig() {
@@ -734,6 +759,7 @@ async function incrementProcessedCount() {
 
 async function stopDownloads() {
   stopRequested = true;
+  stopInProgress = Boolean(workerRunning);
   const downloadId = activeDownloadId;
   if (downloadId) {
     try {
@@ -743,18 +769,45 @@ async function stopDownloads() {
     }
   }
   if (!workerRunning) {
+    stopInProgress = false;
     await setStatus({
       running: false,
+      stopping: false,
       state: "已停止",
       message: "当前没有正在运行的插件下载。"
     });
-    return;
+    return { ok: true, message: "当前没有正在运行的插件下载。", state: await getRuntimeState() };
   }
   await setStatus({
     running: true,
+    stopping: true,
     state: "正在停止",
     message: "正在停止插件下载，当前下载会取消并回到 Web 重试。"
   });
+  return { ok: true, message: "正在停止插件下载。", state: await getRuntimeState() };
+}
+
+async function startQueue() {
+  if (workerRunning || stopInProgress) {
+    const state = await getRuntimeState();
+    return {
+      ok: false,
+      code: "already_running",
+      message: state.stopping ? "插件正在停止，请等待停止完成后再重试。" : "插件正在下载中，请先停止或等待完成。",
+      state
+    };
+  }
+  runQueue();
+  return { ok: true, state: await getRuntimeState() };
+}
+
+async function configureAndStartQueue(baseUrl, batchId) {
+  if (workerRunning || stopInProgress) {
+    return startQueue();
+  }
+  const config = await saveConfig(baseUrl, batchId);
+  const response = await startQueue();
+  return { ...response, config };
 }
 
 async function runQueue() {
@@ -763,10 +816,12 @@ async function runQueue() {
   }
   workerRunning = true;
   stopRequested = false;
+  stopInProgress = false;
   driveResourceMetadataCache = new Map();
   const attemptedIds = new Set();
   await setStatus({
     running: true,
+    stopping: false,
     state: "运行中",
     processed: 0,
     done: 0,
@@ -825,21 +880,42 @@ async function runQueue() {
     });
   } finally {
     workerRunning = false;
-    await setStatus({ running: false, currentSku: "", currentSourceType: "" });
+    stopInProgress = false;
+    await setStatus({ running: false, stopping: false, currentSku: "", currentSourceType: "" });
   }
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "status") {
+    getRuntimeState()
+      .then((state) => {
+        sendResponse({ ok: true, state });
+      })
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error: String(error && error.message ? error.message : error)
+        });
+      });
+    return true;
+  }
   if (message.type === "start") {
-    runQueue();
-    sendResponse({ ok: true });
+    startQueue()
+      .then((response) => {
+        sendResponse(response);
+      })
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error: String(error && error.message ? error.message : error)
+        });
+      });
     return true;
   }
   if (message.type === "configureAndStart") {
-    saveConfig(message.baseUrl, message.batchId)
-      .then((config) => {
-        runQueue();
-        sendResponse({ ok: true, config });
+    configureAndStartQueue(message.baseUrl, message.batchId)
+      .then((response) => {
+        sendResponse(response);
       })
       .catch((error) => {
         sendResponse({
@@ -851,8 +927,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.type === "pause") {
     stopDownloads()
-      .then(() => {
-        sendResponse({ ok: true });
+      .then((response) => {
+        sendResponse(response);
       })
       .catch((error) => {
         sendResponse({
@@ -864,8 +940,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.type === "stop") {
     stopDownloads()
-      .then(() => {
-        sendResponse({ ok: true });
+      .then((response) => {
+        sendResponse(response);
       })
       .catch((error) => {
         sendResponse({

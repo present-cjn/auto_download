@@ -17,6 +17,7 @@ async function loadState() {
     baseUrl: DEFAULT_BASE_URL,
     batchId: "",
     running: false,
+    stopping: false,
     processed: 0,
     done: 0,
     failed: 0,
@@ -29,7 +30,7 @@ async function loadState() {
   });
   baseUrlInput.value = state.baseUrl;
   batchIdInput.value = state.batchId;
-  const visibleState = state.running ? "运行中" : state.state;
+  const visibleState = state.stopping ? "正在停止" : (state.running ? "运行中" : state.state);
   stateEl.textContent = visibleState;
   stateBadgeEl.textContent = visibleState;
   stateBadgeEl.dataset.state = visibleState;
@@ -43,8 +44,8 @@ async function loadState() {
     ? `${state.lastFailureSku ? state.lastFailureSku + ": " : ""}${state.lastFailureReason}`
     : "本轮暂无失败记录";
   messageEl.textContent = state.message || "";
-  startButton.disabled = Boolean(state.running);
-  pauseButton.disabled = !state.running;
+  startButton.disabled = Boolean(state.running || state.stopping);
+  pauseButton.disabled = Boolean(!state.running || state.stopping);
 }
 
 async function saveInputs() {
@@ -57,15 +58,29 @@ async function saveInputs() {
 startButton.addEventListener("click", async () => {
   startButton.disabled = true;
   messageEl.textContent = "正在启动插件下载...";
-  await saveInputs();
-  await chrome.runtime.sendMessage({ type: "start" });
+  try {
+    await saveInputs();
+    const response = await chrome.runtime.sendMessage({ type: "start" });
+    if (!response?.ok) {
+      messageEl.textContent = response?.message || response?.error || "插件启动失败。";
+    }
+  } catch (error) {
+    messageEl.textContent = String(error && error.message ? error.message : error);
+  }
   await loadState();
 });
 
 pauseButton.addEventListener("click", async () => {
   pauseButton.disabled = true;
   messageEl.textContent = "正在停止，当前下载会取消并回到 Web 重试...";
-  await chrome.runtime.sendMessage({ type: "stop" });
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "stop" });
+    if (!response?.ok) {
+      messageEl.textContent = response?.message || response?.error || "插件停止失败。";
+    }
+  } catch (error) {
+    messageEl.textContent = String(error && error.message ? error.message : error);
+  }
   await loadState();
 });
 

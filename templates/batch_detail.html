@@ -133,6 +133,7 @@
       type="button"
       data-base-url="{{ request.url.scheme }}://{{ request.url.netloc }}"
       data-batch-id="{{ batch.id }}"
+      data-can-start="{% if batch.status != 'needs_fix' and (status_counts.pending + status_counts.failed) > 0 %}true{% else %}false{% endif %}"
       {% if batch.status == "downloading" or batch.status == "needs_fix" or (status_counts.pending + status_counts.failed) == 0 %}disabled{% endif %}
     >用插件下载待处理项</button>
     <span id="extension-start-status">
@@ -186,29 +187,73 @@
     if (!button || !stopButton || !status || !stopStatus) {
       return;
     }
+    var canStart = button.dataset.canStart === "true";
+
+    function runtimeStateFromEvent(eventData) {
+      var response = eventData && eventData.response ? eventData.response : {};
+      return response.state || {};
+    }
+
+    function runtimeErrorFromEvent(eventData, fallback) {
+      var response = eventData && eventData.response ? eventData.response : {};
+      return response.message || response.error || eventData.error || fallback;
+    }
+
+    function applyRuntimeState(state) {
+      var running = Boolean(state && state.running);
+      var stopping = Boolean(state && state.stopping);
+      var runtimeBatchId = state && state.batchId ? String(state.batchId) : "";
+      var pageBatchId = String(button.dataset.batchId || "");
+      var sameBatch = runtimeBatchId && runtimeBatchId === pageBatchId;
+
+      if (stopping) {
+        button.disabled = true;
+        stopButton.disabled = true;
+        status.textContent = sameBatch
+          ? "插件正在停止本批次下载，请稍后刷新页面后重试失败项。"
+          : "插件正在停止批次 " + (runtimeBatchId || "-") + "，请稍后再启动。";
+        stopStatus.textContent = "正在停止插件下载，当前项会标记失败。";
+        return;
+      }
+
+      if (running) {
+        button.disabled = true;
+        stopButton.disabled = false;
+        status.textContent = sameBatch
+          ? "插件正在下载本批次，请不要重复启动。"
+          : "插件正在处理批次 " + (runtimeBatchId || "-") + "，请先停止或等待完成。";
+        stopStatus.textContent = "停止后，当前项会标记失败；请回到 Web 批次页重试。";
+        return;
+      }
+
+      button.disabled = !canStart;
+      stopButton.disabled = true;
+    }
 
     window.addEventListener("message", function (event) {
       if (event.source !== window || !event.data || event.data.type !== "autoDownloadExtensionAck") {
         return;
       }
+      var response = event.data.response || {};
+      var responseOk = Boolean(event.data.ok && response.ok !== false);
       if (event.data.action === "stop") {
-        stopButton.disabled = false;
-        if (event.data.ok) {
-          stopButton.disabled = true;
-          button.disabled = false;
+        if (responseOk) {
+          applyRuntimeState(runtimeStateFromEvent(event.data));
           stopStatus.textContent = "已通知插件停止，当前项会标记失败；请稍后刷新页面后重试失败项。";
         } else {
-          stopStatus.textContent = "插件停止失败：" + (event.data.error || "未知错误");
-        }
-      } else {
-        button.disabled = false;
-        if (event.data.ok) {
-          button.disabled = true;
           stopButton.disabled = false;
+          stopStatus.textContent = "插件停止失败：" + runtimeErrorFromEvent(event.data, "未知错误");
+        }
+      } else if (event.data.action === "start") {
+        if (responseOk) {
+          applyRuntimeState(runtimeStateFromEvent(event.data));
           status.textContent = "已发送到插件，插件会在后台下载并更新本页状态。";
         } else {
-          status.textContent = "插件启动失败：" + (event.data.error || "未知错误");
+          applyRuntimeState(runtimeStateFromEvent(event.data));
+          status.textContent = runtimeErrorFromEvent(event.data, "插件启动失败。");
         }
+      } else if (event.data.action === "status" && responseOk) {
+        applyRuntimeState(runtimeStateFromEvent(event.data));
       }
     });
 
@@ -241,6 +286,10 @@
         }
       }, 2500);
     });
+
+    window.postMessage({
+      type: "autoDownloadExtensionStatus"
+    }, window.location.origin);
   }());
 </script>
 
