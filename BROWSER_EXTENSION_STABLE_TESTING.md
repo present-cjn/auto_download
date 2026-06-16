@@ -219,6 +219,8 @@ https://drive.google.com/uc?id=<file_id>
 
 如果失败详情里 `drive_file_id=` 为空，并且文件名类似 `design-<id>-drive-file`，通常说明服务器没有把链接解析成 Drive folder/file。先确认服务器已更新到包含该链接解析修复的代码，再重试失败项。
 
+如果失败详情是 `Drive API 404: 找不到文件`，但浏览器手动打开链接能看到图片，通常是插件 OAuth 授权的 Google 账号和能打开链接的 Google 账号不一致，或文件来自 `与我共享` / 共享云端硬盘。请在同一个 Chrome Profile 中确认当前 Google 账号能直接打开该链接；如果页面提示请求访问权限，代码无法绕过权限限制。
+
 如果需要中断当前批次，点击 Web 批次页的 `停止插件下载` 或 popup 的 `停止`。当前下载项会标记失败，之后从 Web 批次页重试。
 
 ### 页面按钮没有唤起插件

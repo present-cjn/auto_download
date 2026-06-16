@@ -271,9 +271,21 @@ async function driveFetchJson(url, token) {
   });
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`Drive API ${response.status}: ${text.slice(0, 300)}`);
+    throw new Error(formatDriveApiError(response.status, text));
   }
   return response.json();
+}
+
+function formatDriveApiError(status, text) {
+  const detail = String(text || "").slice(0, 300);
+  if (Number(status) === 404) {
+    return [
+      "Drive API 404: 找不到文件。",
+      "常见原因：插件授权的 Google 账号没有权限、文件在“与我共享/共享云端硬盘”中但账号不匹配、文件已删除或链接失效。",
+      detail
+    ].join(" ");
+  }
+  return `Drive API ${status}: ${detail}`;
 }
 
 async function listFolderImages(folderId, token) {
@@ -467,7 +479,7 @@ async function downloadDriveFileByApi(file, task, token) {
     file,
     filename,
     downloadOptions: {
-      url: `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`,
+      url: `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`,
       filename,
       headers: [{ name: "Authorization", value: `Bearer ${token}` }]
     }
@@ -485,7 +497,7 @@ async function downloadSingleFile(task, token) {
     let metadata = cacheKey ? driveResourceMetadataCache.get(cacheKey) : null;
     if (!metadata) {
       metadata = await driveFetchJson(
-        `https://www.googleapis.com/drive/v3/files/${task.resource_id}?fields=id,name,mimeType,size`,
+        `https://www.googleapis.com/drive/v3/files/${task.resource_id}?fields=id,name,mimeType,size&supportsAllDrives=true`,
         token
       );
       if (cacheKey) {
