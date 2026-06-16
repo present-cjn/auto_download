@@ -174,6 +174,13 @@ def refresh_batch_status_after_extension_update(batch_id: int) -> None:
         db.update_batch_status(batch_id, "completed")
 
 
+def recover_stale_extension_downloads(batch_id: int) -> int:
+    recovered = db.recover_stale_downloading_items(batch_id)
+    if recovered:
+        refresh_batch_status_after_extension_update(batch_id)
+    return recovered
+
+
 def drive_resource_payload(url: str) -> dict[str, str]:
     try:
         resource = parse_drive_resource(url)
@@ -372,6 +379,8 @@ def reset_user_password(request: Request, user_id: int, password: str = Form("")
 def batch_detail(request: Request, batch_id: int):
     user = require_user(request)
     batch = require_batch_access(batch_id, user)
+    if recover_stale_extension_downloads(batch_id):
+        batch = require_batch_access(batch_id, user)
     orders = db.get_batch_orders(batch_id)
     enrich_order_download_durations(orders)
     display_rows = []
@@ -458,6 +467,8 @@ def batch_detail(request: Request, batch_id: int):
 def batch_status(request: Request, batch_id: int):
     user = require_user(request)
     batch = require_batch_access(batch_id, user)
+    if recover_stale_extension_downloads(batch_id):
+        batch = require_batch_access(batch_id, user)
     return {"batch": batch, "status_counts": db.get_batch_status_counts(batch_id)}
 
 
@@ -465,6 +476,8 @@ def batch_status(request: Request, batch_id: int):
 def extension_download_items(request: Request, batch_id: int, limit: int = 50):
     user = require_user(request)
     batch = require_batch_access(batch_id, user)
+    if recover_stale_extension_downloads(batch_id):
+        batch = require_batch_access(batch_id, user)
     items = db.get_extension_download_items(batch_id, limit)
     counts = db.get_batch_status_counts(batch_id)
     return {
@@ -489,6 +502,22 @@ def extension_start_download_item(request: Request, download_item_id: int):
     db.mark_download_started(download_item_id)
     refresh_batch_status_after_extension_update(int(item["batch_id"]))
     return {"ok": True, "download_item_id": download_item_id}
+
+
+@app.post("/api/extension/download-items/{download_item_id}/heartbeat")
+def extension_download_item_heartbeat(request: Request, download_item_id: int):
+    user = require_user(request)
+    item = db.get_download_item(download_item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Download item not found")
+    require_batch_access(int(item["batch_id"]), user)
+    updated = db.mark_download_heartbeat(download_item_id)
+    return {
+        "ok": True,
+        "download_item_id": download_item_id,
+        "updated": updated,
+        "status": item["status"],
+    }
 
 
 @app.post("/api/extension/download-items/{download_item_id}/success")

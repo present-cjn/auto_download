@@ -28,6 +28,7 @@ CREATE TABLE download_items (
     error_code TEXT,
     error_detail TEXT,
     started_at TEXT,
+    heartbeat_at TEXT,
     completed_at TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(batch_id, order_item_id, design_link, source_type)
@@ -124,7 +125,7 @@ def migrate_download_items_schema(conn: sqlite3.Connection) -> None:
         INSERT OR IGNORE INTO download_items (
             id, batch_id, order_id, order_item_id, order_no, row_number, sku,
             design_link, source_type, status, image_count, error_message, error_code,
-            error_detail, started_at, completed_at, created_at
+            error_detail, started_at, heartbeat_at, completed_at, created_at
         )
         SELECT
             di.id,
@@ -142,6 +143,7 @@ def migrate_download_items_schema(conn: sqlite3.Connection) -> None:
             {error_code_expression},
             {error_detail_expression},
             di.started_at,
+            NULL,
             di.completed_at,
             di.created_at
         FROM download_items_legacy di
@@ -183,6 +185,7 @@ def ensure_schema_columns(conn: sqlite3.Connection) -> None:
     if table_columns(conn, "download_items"):
         ensure_column(conn, "download_items", "error_code", "error_code TEXT")
         ensure_column(conn, "download_items", "error_detail", "error_detail TEXT")
+        ensure_column(conn, "download_items", "heartbeat_at", "heartbeat_at TEXT")
         if "source_type" not in table_columns(conn, "download_items"):
             migrate_download_items_schema(conn)
     if table_columns(conn, "order_items"):
@@ -349,6 +352,40 @@ def reconcile_interrupted_batches(conn: sqlite3.Connection) -> None:
         )
 
 
+def recover_stale_downloading_items(batch_id: int, stale_minutes: int = 30) -> int:
+    stale_minutes = max(1, int(stale_minutes))
+    stale_modifier = f"-{stale_minutes} minutes"
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id
+            FROM download_items
+            WHERE batch_id = ?
+              AND status = 'downloading'
+              AND datetime(COALESCE(heartbeat_at, started_at, created_at)) <= datetime('now', ?)
+            """,
+            (batch_id, stale_modifier),
+        ).fetchall()
+        if not rows:
+            return 0
+        item_ids = [int(row["id"]) for row in rows]
+        placeholders = ",".join("?" for _ in item_ids)
+        conn.execute(
+            f"""
+            UPDATE download_items
+            SET status = 'failed',
+                error_message = '插件中断或页面重新加载，下载结果未回写，请重试。',
+                error_code = 'interrupted',
+                error_detail = 'Recovered stale extension downloading item after missing heartbeat.',
+                completed_at = CURRENT_TIMESTAMP
+            WHERE id IN ({placeholders})
+            """,
+            item_ids,
+        )
+        refresh_batch_counts_with_conn(conn, batch_id)
+        return len(item_ids)
+
+
 def init_db(db_path: Optional[Path] = None) -> None:
     with connect(db_path) as conn:
         migrate_download_items_schema(conn)
@@ -431,6 +468,7 @@ def init_db(db_path: Optional[Path] = None) -> None:
                 error_code TEXT,
                 error_detail TEXT,
                 started_at TEXT,
+                heartbeat_at TEXT,
                 completed_at TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(batch_id, order_item_id, design_link, source_type)
@@ -1049,11 +1087,25 @@ def mark_download_started(download_item_id: int) -> None:
             UPDATE download_items
             SET status = 'downloading', error_message = NULL,
                 error_code = NULL, error_detail = NULL, image_count = 0,
-                started_at = CURRENT_TIMESTAMP, completed_at = NULL
+                started_at = CURRENT_TIMESTAMP, heartbeat_at = CURRENT_TIMESTAMP,
+                completed_at = NULL
             WHERE id = ?
             """,
             (download_item_id,),
         )
+
+
+def mark_download_heartbeat(download_item_id: int) -> bool:
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE download_items
+            SET heartbeat_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND status = 'downloading'
+            """,
+            (download_item_id,),
+        )
+        return cursor.rowcount > 0
 
 
 def mark_download_success(download_item_id: int, image_count: int) -> None:

@@ -9,6 +9,7 @@ from app.core.downloader import ERROR_LABELS
 from app.core.excel_parser import OrderItemRow
 from app.core.security import hash_password, new_session_token, session_expiry_string
 from app.main import (
+    extension_download_item_heartbeat,
     extension_download_item_failure,
     extension_download_item_success,
     extension_download_items,
@@ -165,6 +166,87 @@ def test_extension_success_and_failure_update_download_state(tmp_path: Path) -> 
         counts = db.get_batch_status_counts(batch_id)
         assert counts["downloaded"] == 1
         assert counts["failed"] == 1
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_extension_heartbeat_updates_downloading_item(tmp_path: Path) -> None:
+    original_path, token, batch_id, _ = setup_extension_batch(tmp_path / "app.db")
+    try:
+        request = FakeRequest(token)
+        design_id = extension_download_items(request, batch_id)["items"][0]["download_item_id"]
+        extension_start_download_item(request, design_id)
+        with db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE download_items
+                SET heartbeat_at = datetime('now', '-10 minutes')
+                WHERE id = ?
+                """,
+                (design_id,),
+            )
+
+        response = extension_download_item_heartbeat(request, design_id)
+
+        assert response["ok"] is True
+        assert response["updated"] is True
+        item = db.get_download_item(design_id)
+        assert item["heartbeat_at"] is not None
+        assert item["status"] == "downloading"
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_extension_download_items_recovers_stale_downloading_item(tmp_path: Path) -> None:
+    original_path, token, batch_id, _ = setup_extension_batch(tmp_path / "app.db")
+    try:
+        request = FakeRequest(token)
+        design_id = extension_download_items(request, batch_id)["items"][0]["download_item_id"]
+        extension_start_download_item(request, design_id)
+        with db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE download_items
+                SET started_at = datetime('now', '-31 minutes'),
+                    heartbeat_at = datetime('now', '-31 minutes')
+                WHERE id = ?
+                """,
+                (design_id,),
+            )
+
+        payload = extension_download_items(request, batch_id)
+
+        recovered = db.get_download_item(design_id)
+        assert recovered["status"] == "failed"
+        assert recovered["error_code"] == "interrupted"
+        assert "下载结果未回写" in recovered["error_message"]
+        assert any(item["download_item_id"] == design_id for item in payload["items"])
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_extension_download_items_keeps_fresh_downloading_item(tmp_path: Path) -> None:
+    original_path, token, batch_id, _ = setup_extension_batch(tmp_path / "app.db")
+    try:
+        request = FakeRequest(token)
+        design_id = extension_download_items(request, batch_id)["items"][0]["download_item_id"]
+        extension_start_download_item(request, design_id)
+        with db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE download_items
+                SET started_at = datetime('now', '-31 minutes'),
+                    heartbeat_at = datetime('now', '-1 minutes')
+                WHERE id = ?
+                """,
+                (design_id,),
+            )
+
+        payload = extension_download_items(request, batch_id)
+
+        current = db.get_download_item(design_id)
+        assert current["status"] == "downloading"
+        assert all(item["download_item_id"] != design_id for item in payload["items"])
     finally:
         db.DB_PATH = original_path
 

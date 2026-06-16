@@ -7,6 +7,7 @@ const GOOGLE_APPS_FOLDER_MIME = "application/vnd.google-apps.folder";
 const DOWNLOAD_RETRY_DELAYS_MS = [3000, 8000, 15000];
 const DOWNLOAD_WAIT_TIMEOUT_MS = 30 * 60 * 1000;
 const DOWNLOAD_POLL_INTERVAL_MS = 1000;
+const DOWNLOAD_ITEM_HEARTBEAT_MS = 30 * 1000;
 const RETRIABLE_DOWNLOAD_ERRORS = new Set([
   "NETWORK_FAILED",
   "NETWORK_TIMEOUT",
@@ -216,6 +217,23 @@ async function apiFetch(baseUrl, path, options = {}) {
     throw new Error(`Web API ${response.status}: ${text.slice(0, 300)}`);
   }
   return response.json();
+}
+
+function startDownloadItemHeartbeat(baseUrl, downloadItemId) {
+  const heartbeat = async () => {
+    try {
+      await apiFetch(baseUrl, `/api/extension/download-items/${downloadItemId}/heartbeat`, {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+    } catch (error) {
+      await setStatus({
+        message: `当前项心跳更新失败：${errorMessage(error).slice(0, 120)}`
+      });
+    }
+  };
+  const timerId = setInterval(heartbeat, DOWNLOAD_ITEM_HEARTBEAT_MS);
+  return () => clearInterval(timerId);
 }
 
 function hasConfiguredOAuthClient() {
@@ -694,11 +712,13 @@ async function downloadFolder(task, token) {
 
 async function processTask(baseUrl, task) {
   currentTask = task;
+  let stopHeartbeat = null;
   try {
     await apiFetch(baseUrl, `/api/extension/download-items/${task.download_item_id}/start`, {
       method: "POST",
       body: JSON.stringify({})
     });
+    stopHeartbeat = startDownloadItemHeartbeat(baseUrl, task.download_item_id);
     await setStatus({
       state: "下载中",
       message: `${task.sku} · ${task.source_type}`,
@@ -747,6 +767,9 @@ async function processTask(baseUrl, task) {
       lastFailureReason: failureReason
     });
   } finally {
+    if (stopHeartbeat) {
+      stopHeartbeat();
+    }
     currentTask = null;
     await setStatus({ currentSku: "", currentSourceType: "" });
   }
