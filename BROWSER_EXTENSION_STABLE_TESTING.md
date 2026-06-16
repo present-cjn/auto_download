@@ -19,6 +19,7 @@
 - 默认入口：`https://dev.waysing.cn`。
 - 服务器路径：`/opt/auto_download`。
 - 发布分支：`master`。
+- 状态机重构设计基线：`BROWSER_EXTENSION_STATE_MACHINE_V1.md`（`v1.0-design`，`2026-06-16`，Proposed）。
 - 合并策略：浏览器插件下载功能由 `feature/browser-extension-downloader` 合并到 `master`，后续物流订单接入从合并后的 `master` 新开 feature 分支。
 - 主要内容：
   - 浏览器插件下载为推荐链路，服务器 gdown 下载仅保留为管理员应急入口。
