@@ -26,7 +26,6 @@ REQUIRED_IMPORT_FIELDS = [
     "shipping_fullname",
     "address",
     "city",
-    "province",
     "zip_code",
     "country",
 ]

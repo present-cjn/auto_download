@@ -17,6 +17,7 @@ let workerRunning = false;
 let stopRequested = false;
 let activeDownloadId = null;
 let currentTask = null;
+let driveResourceMetadataCache = new Map();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -92,6 +93,13 @@ function isRetriableDownloadError(error) {
 
 function fileLabel(file) {
   return file.name || file.id || "drive-file";
+}
+
+function driveResourceCacheKey(task) {
+  if (!task.resource_kind || !task.resource_id || task.resource_kind === "url") {
+    return "";
+  }
+  return `${task.resource_kind}:${task.resource_id}`;
 }
 
 function buildDownloadFailureDetail(task, file, filename, attempt, maxAttempts, error) {
@@ -473,10 +481,17 @@ async function downloadDriveFileByApi(file, task, token) {
 
 async function downloadSingleFile(task, token) {
   if (token && task.resource_id) {
-    const metadata = await driveFetchJson(
-      `https://www.googleapis.com/drive/v3/files/${task.resource_id}?fields=id,name,mimeType,size`,
-      token
-    );
+    const cacheKey = driveResourceCacheKey(task);
+    let metadata = cacheKey ? driveResourceMetadataCache.get(cacheKey) : null;
+    if (!metadata) {
+      metadata = await driveFetchJson(
+        `https://www.googleapis.com/drive/v3/files/${task.resource_id}?fields=id,name,mimeType,size`,
+        token
+      );
+      if (cacheKey) {
+        driveResourceMetadataCache.set(cacheKey, metadata);
+      }
+    }
     return [await downloadDriveFileByApi(metadata, task, token)];
   }
 
@@ -500,7 +515,14 @@ async function downloadFolder(task, token) {
   if (!token) {
     throw new Error("Drive 文件夹下载需要 Google OAuth 授权。请在插件授权 Google Drive 读取权限。");
   }
-  const files = await listFolderImages(task.resource_id, token);
+  const cacheKey = driveResourceCacheKey(task);
+  let files = cacheKey ? driveResourceMetadataCache.get(cacheKey) : null;
+  if (!files) {
+    files = await listFolderImages(task.resource_id, token);
+    if (cacheKey) {
+      driveResourceMetadataCache.set(cacheKey, files);
+    }
+  }
   if (!files.length) {
     throw new Error("Drive 文件夹中没有找到图片文件。 ");
   }
@@ -631,6 +653,7 @@ async function runQueue() {
   }
   workerRunning = true;
   stopRequested = false;
+  driveResourceMetadataCache = new Map();
   const attemptedIds = new Set();
   await setStatus({
     running: true,

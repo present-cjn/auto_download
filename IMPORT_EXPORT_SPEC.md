@@ -40,7 +40,7 @@ Excel 是外部协作格式，系统内部使用稳定的数据结构。后续�
 | 11 | Shipping Fullname | 物流阶段必填 | `ShippingAddress.full_name` | 收件人姓名。 |
 | 12 | Address | 物流阶段必填 | `ShippingAddress.address1` | 收件地址。 |
 | 13 | City | 物流阶段必填 | `ShippingAddress.city` | 城市。 |
-| 14 | Province | 物流阶段必填 | `ShippingAddress.province` | 州、省或地区。 |
+| 14 | Province | 物流阶段可选 | `ShippingAddress.province` | 州、省或地区；客户表经常缺失，当前不作为阻塞字段。 |
 | 15 | Zip | 物流阶段必填 | `ShippingAddress.postal_code` | 邮编。 |
 | 16 | Country | 物流阶段必填 | `ShippingAddress.country_code` | 国家或国家代码。 |
 | 17 | Phone | 物流阶段建议填写 | `ShippingAddress.phone` | 收件电话。 |
@@ -59,7 +59,6 @@ Excel 是外部协作格式，系统内部使用稳定的数据结构。后续�
 - `Shipping Fullname`
 - `Address`
 - `City`
-- `Province`
 - `Zip`
 - `Country`
 
@@ -94,7 +93,7 @@ Excel 是外部协作格式，系统内部使用稳定的数据结构。后续�
 - `Design Link` 创建 design 下载任务；`Mockup Link` 有值时创建 mockup 下载任务。
 - Google Drive 链接支持文件夹格式 `/drive/folders/<id>` 和单文件格式 `/file/d/<id>/view`。
 - 如果 `Design Link` 和 `Mockup Link` 下载出同名图片，系统用 `(1)` 后缀保留重复文件，避免漏下载。
-- 同一批次内相同 Google Drive 资源可以复用缓存，避免重复请求 Google Drive。
+- 服务器备用下载中，同一批次内相同 Google Drive 资源会复用缓存，避免重复请求 Google Drive；浏览器插件会复用 Drive 元数据，但仍需为每个 SKU 实际保存文件。
 - 空字段默认不应覆盖已有关键业务字段，尤其是物流单号、地址、备注等需要保留历史判断的字段。
 
 ## 6. 当前下载导出

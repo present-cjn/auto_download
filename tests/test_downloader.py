@@ -205,6 +205,29 @@ def test_cached_drive_folder_reports_non_image_files(tmp_path: Path, monkeypatch
         raise AssertionError("Expected DriveDownloadError")
 
 
+def test_cached_drive_folder_reuses_existing_images(tmp_path: Path, monkeypatch) -> None:
+    calls = []
+
+    def fake_download_folder(folder_id: str, output_dir: Path) -> None:
+        calls.append(folder_id)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "design.jpg").write_bytes(b"jpg")
+
+    monkeypatch.setattr("app.core.downloader.download_drive_folder_by_id", fake_download_folder)
+    monkeypatch.setattr(
+        "app.core.downloader.run_download_with_timeout",
+        lambda download_func, resource_id, output_dir: download_func(resource_id, output_dir),
+    )
+
+    url = "https://drive.google.com/drive/folders/folder123"
+    first_dir = cached_drive_folder(url, tmp_path)
+    second_dir = cached_drive_folder(url, tmp_path)
+
+    assert first_dir == second_dir == tmp_path / "folder-folder123"
+    assert calls == ["folder123"]
+    assert (second_dir / "design.jpg").read_bytes() == b"jpg"
+
+
 def test_run_download_with_timeout_raises_timeout(tmp_path: Path) -> None:
     def slow_download(resource_id: str, output_dir: Path) -> None:
         time.sleep(2)

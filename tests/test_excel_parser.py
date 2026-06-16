@@ -217,6 +217,43 @@ def test_parse_rejects_missing_required_header(tmp_path: Path) -> None:
         parse_order_items(source)
 
 
+def test_parse_allows_missing_province_header_and_values(tmp_path: Path) -> None:
+    source = tmp_path / "without-province.xlsx"
+    headers = [header for header in HEADERS if header != "Province"]
+    row = [
+        "ORD-1",
+        "46174",
+        "https://drive.google.com/drive/folders/design123",
+        "SKU-A",
+        "L",
+        "Black",
+        "1",
+        "",
+        "",
+        "Buyer",
+        "Address",
+        "City",
+        "90001",
+        "US",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+    ]
+    write_xlsx(source, [headers, row])
+
+    items = parse_order_items(source)
+    summary = build_import_summary(items)
+
+    assert len(items) == 1
+    assert items[0].province == ""
+    assert "Province" not in summary["missing_required_fields"]
+    assert summary["can_start_download"] is True
+
+
 def test_parse_standard_headers_and_mockup_link(tmp_path: Path) -> None:
     source = tmp_path / "standard.xlsx"
     design_link = "https://drive.google.com/drive/folders/design123"
