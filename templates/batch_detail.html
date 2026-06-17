@@ -155,9 +155,14 @@
       type="button"
       {% if batch.status != "downloading" and status_counts.downloading == 0 %}disabled{% endif %}
     >停止插件下载</button>
-    <span id="extension-stop-status">停止后，当前项会标记失败；请回到 Web 批次页重试，不要点 Chrome 下载栏继续。</span>
+    <button class="button subtle" id="extension-refresh" type="button">刷新状态</button>
+    <span id="extension-stop-status">停止后，当前项会标记失败；请在本页重试失败项。</span>
   </div>
-  <p class="extension-note">失败项请在本批次页重试，不要点 Chrome 下载栏继续。</p>
+  {% if stale_recovered_count %}
+  <p class="extension-note">发现 {{ stale_recovered_count }} 个上次中断的下载项，已恢复为失败，可在本页重试。</p>
+  {% else %}
+  <p class="extension-note">失败或中断的下载项会留在本页，可直接重试。</p>
+  {% endif %}
 </section>
 
 {% if current_user.role == "admin" %}
@@ -182,16 +187,36 @@
   (function () {
     var button = document.getElementById("extension-start");
     var stopButton = document.getElementById("extension-stop");
+    var refreshButton = document.getElementById("extension-refresh");
     var status = document.getElementById("extension-start-status");
     var stopStatus = document.getElementById("extension-stop-status");
-    if (!button || !stopButton || !status || !stopStatus) {
+    if (!button || !stopButton || !refreshButton || !status || !stopStatus) {
       return;
     }
     var canStart = button.dataset.canStart === "true";
+    var pageBatchId = String(button.dataset.batchId || "");
+    var serverNotice = "";
+    var phaseLabels = {
+      idle: "空闲",
+      ready: "就绪",
+      running: "运行中",
+      stopping: "正在停止",
+      stopped: "已停止",
+      completed: "已完成",
+      failed: "错误",
+      disconnected: "未连接"
+    };
+    var startablePhases = {
+      idle: true,
+      ready: true,
+      stopped: true,
+      completed: true,
+      failed: true
+    };
 
     function runtimeStateFromEvent(eventData) {
       var response = eventData && eventData.response ? eventData.response : {};
-      return response.state || {};
+      return eventData.snapshot || response.snapshot || (response.state && response.state.snapshot) || response.state || {};
     }
 
     function runtimeErrorFromEvent(eventData, fallback) {
@@ -199,14 +224,34 @@
       return response.message || response.error || eventData.error || fallback;
     }
 
-    function applyRuntimeState(state) {
-      var running = Boolean(state && state.running);
-      var stopping = Boolean(state && state.stopping);
-      var runtimeBatchId = state && state.batchId ? String(state.batchId) : "";
-      var pageBatchId = String(button.dataset.batchId || "");
-      var sameBatch = runtimeBatchId && runtimeBatchId === pageBatchId;
+    function batchRelation(snapshot) {
+      if (snapshot && snapshot.batchRelation) {
+        return snapshot.batchRelation;
+      }
+      var runtimeBatchId = snapshot && snapshot.batchId ? String(snapshot.batchId) : "";
+      if (!runtimeBatchId) {
+        return "none";
+      }
+      return runtimeBatchId === pageBatchId ? "same" : "other";
+    }
 
-      if (stopping) {
+    function applyRuntimeState(snapshot) {
+      snapshot = snapshot || {};
+      var phase = snapshot.phase || (snapshot.stopping ? "stopping" : (snapshot.running ? "running" : "ready"));
+      var relation = batchRelation(snapshot);
+      var runtimeBatchId = snapshot.batchId ? String(snapshot.batchId) : "";
+      var sameBatch = relation === "same";
+      var phaseLabel = phaseLabels[phase] || phase;
+
+      if (phase === "disconnected") {
+        button.disabled = true;
+        stopButton.disabled = true;
+        status.textContent = "未检测到插件响应，请确认已安装并启用浏览器插件。";
+        stopStatus.textContent = "插件未连接，无法发送停止请求。";
+        return;
+      }
+
+      if (phase === "stopping") {
         button.disabled = true;
         stopButton.disabled = true;
         status.textContent = sameBatch
@@ -216,18 +261,64 @@
         return;
       }
 
-      if (running) {
+      if (phase === "running") {
         button.disabled = true;
-        stopButton.disabled = false;
+        stopButton.disabled = !sameBatch;
         status.textContent = sameBatch
           ? "插件正在下载本批次，请不要重复启动。"
-          : "插件正在处理批次 " + (runtimeBatchId || "-") + "，请先停止或等待完成。";
-        stopStatus.textContent = "停止后，当前项会标记失败；请回到 Web 批次页重试。";
+          : "插件正在处理批次 " + (runtimeBatchId || "-") + "，请等待完成后再启动本批次。";
+        stopStatus.textContent = sameBatch
+          ? "停止后，当前项会标记失败；请在本页重试失败项。"
+          : "当前页面不能停止其他批次的插件下载。";
         return;
       }
 
-      button.disabled = !canStart;
+      button.disabled = !(canStart && startablePhases[phase]);
       stopButton.disabled = true;
+      if (serverNotice) {
+        status.textContent = serverNotice;
+      } else if (canStart) {
+        status.textContent = "插件" + phaseLabel + "，可开始处理本批次待处理项。";
+      }
+    }
+
+    function markDisconnected(message) {
+      applyRuntimeState({ phase: "disconnected", message: message || "" });
+    }
+
+    function requestExtensionStatus() {
+      window.postMessage({
+        type: "autoDownloadExtensionStatus",
+        batchId: pageBatchId
+      }, window.location.origin);
+    }
+
+    function refreshServerStatus() {
+      return fetch("/batches/" + encodeURIComponent(pageBatchId) + "/status", {
+        credentials: "same-origin"
+      })
+        .then(function (response) {
+          if (!response.ok) {
+            throw new Error("状态接口 " + response.status);
+          }
+          return response.json();
+        })
+        .then(function (payload) {
+          var actions = payload.actions || {};
+          var counts = payload.status_counts || {};
+          canStart = Boolean(actions.can_start_extension);
+          button.dataset.canStart = canStart ? "true" : "false";
+          if (payload.stale_recovered_count) {
+            serverNotice = "发现 " + payload.stale_recovered_count + " 个上次中断的下载项，已恢复为失败，可重试。";
+            status.textContent = serverNotice;
+          } else if (!canStart && Number(counts.pending || 0) + Number(counts.failed || 0) === 0) {
+            serverNotice = "当前没有待插件处理的下载项。";
+            status.textContent = serverNotice;
+          } else {
+            serverNotice = "";
+          }
+          return payload;
+        });
     }
 
     window.addEventListener("message", function (event) {
@@ -254,6 +345,8 @@
         }
       } else if (event.data.action === "status" && responseOk) {
         applyRuntimeState(runtimeStateFromEvent(event.data));
+      } else if (event.data.action === "status") {
+        markDisconnected(runtimeErrorFromEvent(event.data, "插件未响应。"));
       }
     });
 
@@ -267,8 +360,7 @@
       }, window.location.origin);
       window.setTimeout(function () {
         if (status.textContent === "正在唤起插件...") {
-          button.disabled = false;
-          status.textContent = "未检测到插件响应，请确认已安装并启用浏览器插件。";
+          markDisconnected();
         }
       }, 2500);
     });
@@ -281,15 +373,32 @@
       }, window.location.origin);
       window.setTimeout(function () {
         if (stopStatus.textContent === "正在通知插件停止...") {
-          stopButton.disabled = false;
-          stopStatus.textContent = "未检测到插件响应，请确认已安装并启用浏览器插件。";
+          markDisconnected();
         }
       }, 2500);
     });
 
-    window.postMessage({
-      type: "autoDownloadExtensionStatus"
-    }, window.location.origin);
+    refreshButton.addEventListener("click", function () {
+      refreshButton.disabled = true;
+      status.textContent = "正在刷新状态...";
+      refreshServerStatus()
+        .catch(function (error) {
+          status.textContent = "刷新服务端状态失败：" + String(error && error.message ? error.message : error);
+        })
+        .finally(function () {
+          refreshButton.disabled = false;
+          requestExtensionStatus();
+        });
+    });
+
+    button.disabled = true;
+    status.textContent = "正在检测插件状态...";
+    refreshServerStatus().finally(requestExtensionStatus);
+    window.setTimeout(function () {
+      if (status.textContent === "正在检测插件状态...") {
+        markDisconnected();
+      }
+    }, 2500);
   }());
 </script>
 

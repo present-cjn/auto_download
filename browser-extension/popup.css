@@ -35,16 +35,26 @@ h1 {
   white-space: nowrap;
 }
 
-#stateBadge[data-state="运行中"] {
+#stateBadge[data-state="running"],
+#stateBadge[data-state="completed"],
+#stateBadge[data-state="ready"] {
   background: #e8f5ec;
   border-color: #b8dfc2;
   color: #137333;
 }
 
-#stateBadge[data-state="错误"] {
+#stateBadge[data-state="failed"],
+#stateBadge[data-state="disconnected"] {
   background: #fdeceb;
   border-color: #f4b6b0;
   color: #b42318;
+}
+
+#stateBadge[data-state="stopping"],
+#stateBadge[data-state="stopped"] {
+  background: #fff7e6;
+  border-color: #f0cf8a;
+  color: #684400;
 }
 
 .config-panel {

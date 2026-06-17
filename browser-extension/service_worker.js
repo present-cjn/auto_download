@@ -1,5 +1,6 @@
 const SESSION_COOKIE = "app_session";
 const DEFAULT_BASE_URL = "https://dev.waysing.cn";
+const PROTOCOL_VERSION = 2;
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const IMAGE_MIME_PREFIX = "image/";
 const GOOGLE_APPS_MIME_PREFIX = "application/vnd.google-apps.";
@@ -141,13 +142,83 @@ function enrichDownloadError(error, task, file, filename, attempt, maxAttempts) 
 }
 
 async function setStatus(patch) {
-  await chrome.storage.local.set(patch);
+  await chrome.storage.local.set({
+    ...patch,
+    updatedAt: new Date().toISOString()
+  });
 }
 
-async function getRuntimeState() {
+function legacyStateToPhase(state) {
+  const legacyState = String(state.state || "");
+  if (state.stopping || stopInProgress) {
+    return "stopping";
+  }
+  if (state.running || workerRunning) {
+    return "running";
+  }
+  if (legacyState === "已停止") {
+    return "stopped";
+  }
+  if (legacyState === "已完成") {
+    return "completed";
+  }
+  if (legacyState === "错误") {
+    return "failed";
+  }
+  if (!String(state.baseUrl || "").trim() || !String(state.batchId || "").trim()) {
+    return "idle";
+  }
+  return "ready";
+}
+
+function batchRelation(runtimeBatchId, requestedBatchId) {
+  const runtimeId = String(runtimeBatchId || "").trim();
+  const requestedId = String(requestedBatchId || "").trim();
+  if (!runtimeId) {
+    return "none";
+  }
+  if (requestedId && runtimeId === requestedId) {
+    return "same";
+  }
+  return requestedId ? "other" : "none";
+}
+
+function sourceTypeLabel(sourceType) {
+  return sourceType === "mockup" ? "Mockup" : "Design";
+}
+
+function buildCurrentTask(state) {
+  const task = currentTask || null;
+  const sku = task?.sku || state.currentSku || "";
+  const sourceType = task?.source_type || state.currentSourceType || "";
+  if (!sku && !sourceType && !task?.download_item_id) {
+    return null;
+  }
+  return {
+    downloadItemId: task?.download_item_id || "",
+    sku,
+    sourceType,
+    sourceTypeLabel: sourceType ? sourceTypeLabel(sourceType) : ""
+  };
+}
+
+function buildLastError(state) {
+  const message = state.lastFailureReason || "";
+  if (!message) {
+    return null;
+  }
+  return {
+    code: state.lastFailureCode || "",
+    sku: state.lastFailureSku || "",
+    message
+  };
+}
+
+async function getRuntimeState(compareBatchId = "") {
   const state = await chrome.storage.local.get({
     baseUrl: DEFAULT_BASE_URL,
     batchId: "",
+    phase: "",
     running: false,
     stopping: false,
     processed: 0,
@@ -156,15 +227,54 @@ async function getRuntimeState() {
     currentSku: "",
     currentSourceType: "",
     lastFailureSku: "",
+    lastFailureCode: "",
     lastFailureReason: "",
     message: "",
-    state: "未连接"
+    state: "未连接",
+    updatedAt: ""
   });
-  return {
+  const running = Boolean(workerRunning);
+  const stopping = Boolean(stopInProgress);
+  const normalizedState = {
     ...state,
-    running: Boolean(workerRunning || state.running),
-    stopping: Boolean(stopInProgress || state.stopping),
+    running,
+    stopping,
     activeDownloadId
+  };
+  const storedPhase = String(state.phase || "");
+  const canReuseStoredPhase = !running && !stopping && !["running", "stopping"].includes(storedPhase);
+  const phase = canReuseStoredPhase && storedPhase
+    ? storedPhase
+    : legacyStateToPhase(normalizedState);
+  normalizedState.phase = phase;
+  normalizedState.batchRelation = batchRelation(state.batchId, compareBatchId);
+  return {
+    ...normalizedState,
+    snapshot: {
+      phase,
+      baseUrl: state.baseUrl,
+      batchId: String(state.batchId || ""),
+      batchRelation: normalizedState.batchRelation,
+      isRunning: running,
+      isStopping: stopping,
+      processed: Number(state.processed || 0),
+      done: Number(state.done || 0),
+      failed: Number(state.failed || 0),
+      currentTask: buildCurrentTask(state),
+      lastError: buildLastError(state),
+      message: state.message || "",
+      updatedAt: state.updatedAt || ""
+    }
+  };
+}
+
+function runtimeResponse(state, extra = {}) {
+  return {
+    ok: true,
+    protocolVersion: PROTOCOL_VERSION,
+    state,
+    snapshot: state.snapshot,
+    ...extra
   };
 }
 
@@ -189,7 +299,9 @@ async function saveConfig(baseUrl, batchId) {
   }
   await chrome.storage.local.set({
     baseUrl: normalizedBaseUrl,
-    batchId: normalizedBatchId
+    batchId: normalizedBatchId,
+    phase: "ready",
+    updatedAt: new Date().toISOString()
   });
   return { baseUrl: normalizedBaseUrl, batchId: normalizedBatchId };
 }
@@ -311,14 +423,14 @@ async function assertImageDownload(downloadItem, file, label) {
   }
   if (!mime.startsWith("image/")) {
     await cleanupBadDownload(downloadItem);
-    const error = new Error(`${label} 下载结果不是图片，浏览器收到的类型是 ${mime || "unknown"}。这通常表示下载到了 Google Drive 预览页或权限提示页。失败项请回到 Web 批次页重试，不要点 Chrome 下载栏继续。`);
+    const error = new Error(`${label} 下载结果不是图片，浏览器收到的类型是 ${mime || "unknown"}。这通常表示下载到了 Google Drive 预览页或权限提示页。失败项请在 Web 批次页重试。`);
     error.errorCode = "extension_non_image_download";
     error.errorMessage = "插件下载到了非图片文件。";
     throw error;
   }
   if (!metadataIsImage && downloadLooksHtml(downloadItem)) {
     await cleanupBadDownload(downloadItem);
-    const error = new Error(`${label} 下载到了 HTML 文件。这通常表示 Google Drive 返回了预览页、权限页或确认页。失败项请回到 Web 批次页重试，不要点 Chrome 下载栏继续。`);
+    const error = new Error(`${label} 下载到了 HTML 文件。这通常表示 Google Drive 返回了预览页、权限页或确认页。失败项请在 Web 批次页重试。`);
     error.errorCode = "extension_non_image_download";
     error.errorMessage = "插件下载到了非图片文件。";
     throw error;
@@ -475,7 +587,7 @@ function waitForDownload(downloadId) {
         return;
       }
       if (current.paused) {
-        rejectDownload(new Error("Chrome 下载已暂停或需要在下载栏继续。请不要点 Chrome 下载栏继续，请回到 Web 重试。"));
+        rejectDownload(new Error("浏览器下载已暂停或需要人工确认，本项已跳过。请在 Web 批次页重试。"));
         return;
       }
       if (current.danger && current.danger !== "safe" && current.danger !== "accepted") {
@@ -720,6 +832,7 @@ async function processTask(baseUrl, task) {
     });
     stopHeartbeat = startDownloadItemHeartbeat(baseUrl, task.download_item_id);
     await setStatus({
+      phase: "running",
       state: "下载中",
       message: `${task.sku} · ${task.source_type}`,
       currentSku: task.sku,
@@ -764,6 +877,7 @@ async function processTask(baseUrl, task) {
       failed: Number(state.failed || 0) + 1,
       message: `失败 ${task.sku}: ${failureReason.slice(0, 120)}`,
       lastFailureSku: task.sku,
+      lastFailureCode: errorCode,
       lastFailureReason: failureReason
     });
   } finally {
@@ -794,42 +908,48 @@ async function stopDownloads() {
   if (!workerRunning) {
     stopInProgress = false;
     await setStatus({
+      phase: "stopped",
       running: false,
       stopping: false,
       state: "已停止",
       message: "当前没有正在运行的插件下载。"
     });
-    return { ok: true, message: "当前没有正在运行的插件下载。", state: await getRuntimeState() };
+    const state = await getRuntimeState();
+    return runtimeResponse(state, { message: "当前没有正在运行的插件下载。" });
   }
   await setStatus({
+    phase: "stopping",
     running: true,
     stopping: true,
     state: "正在停止",
     message: "正在停止插件下载，当前下载会取消并回到 Web 重试。"
   });
-  return { ok: true, message: "正在停止插件下载。", state: await getRuntimeState() };
+  const state = await getRuntimeState();
+  return runtimeResponse(state, { message: "正在停止插件下载。" });
 }
 
-async function startQueue() {
+async function startQueue(compareBatchId = "") {
   if (workerRunning || stopInProgress) {
-    const state = await getRuntimeState();
+    const state = await getRuntimeState(compareBatchId);
     return {
       ok: false,
+      protocolVersion: PROTOCOL_VERSION,
       code: "already_running",
       message: state.stopping ? "插件正在停止，请等待停止完成后再重试。" : "插件正在下载中，请先停止或等待完成。",
-      state
+      state,
+      snapshot: state.snapshot
     };
   }
   runQueue();
-  return { ok: true, state: await getRuntimeState() };
+  return runtimeResponse(await getRuntimeState(compareBatchId));
 }
 
 async function configureAndStartQueue(baseUrl, batchId) {
   if (workerRunning || stopInProgress) {
-    return startQueue();
+    return startQueue(batchId);
   }
   const config = await saveConfig(baseUrl, batchId);
-  const response = await startQueue();
+  const response = await startQueue(batchId);
   return { ...response, config };
 }
 
@@ -843,6 +963,7 @@ async function runQueue() {
   driveResourceMetadataCache = new Map();
   const attemptedIds = new Set();
   await setStatus({
+    phase: "running",
     running: true,
     stopping: false,
     state: "运行中",
@@ -852,6 +973,7 @@ async function runQueue() {
     currentSku: "",
     currentSourceType: "",
     lastFailureSku: "",
+    lastFailureCode: "",
     lastFailureReason: "",
     message: "正在连接 Web..."
   });
@@ -867,7 +989,7 @@ async function runQueue() {
       );
       const items = (payload.items || []).filter((item) => !attemptedIds.has(item.download_item_id));
       if (!items.length) {
-        await setStatus({ state: "已完成", message: "没有待下载项。" });
+        await setStatus({ phase: "completed", state: "已完成", message: "没有待下载项。" });
         break;
       }
       for (const task of items) {
@@ -891,13 +1013,15 @@ async function runQueue() {
       }
     }
     if (stopRequested) {
-      await setStatus({ state: "已停止", message: "已停止插件下载，失败项请回到 Web 批次页重试。" });
+      await setStatus({ phase: "stopped", state: "已停止", message: "已停止插件下载，失败项请回到 Web 批次页重试。" });
     }
   } catch (error) {
     await setStatus({
+      phase: "failed",
       state: "错误",
       currentSku: "",
       currentSourceType: "",
+      lastFailureCode: "extension_runtime_failed",
       lastFailureReason: errorMessage(error),
       message: String(error.message || error)
     });
@@ -910,9 +1034,9 @@ async function runQueue() {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "status") {
-    getRuntimeState()
+    getRuntimeState(message.batchId)
       .then((state) => {
-        sendResponse({ ok: true, state });
+        sendResponse(runtimeResponse(state));
       })
       .catch((error) => {
         sendResponse({

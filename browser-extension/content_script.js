@@ -20,15 +20,19 @@ window.addEventListener("message", async (event) => {
         batchId: String(event.data.batchId || "")
       });
     } else if (event.data.type === STATUS_MESSAGE) {
-      response = await chrome.runtime.sendMessage({ type: "status" });
+      response = await chrome.runtime.sendMessage({
+        type: "status",
+        batchId: String(event.data.batchId || "")
+      });
     } else {
       response = await chrome.runtime.sendMessage({ type: "stop" });
     }
     window.postMessage({
       type: ACK_MESSAGE,
       action: event.data.type === START_MESSAGE ? "start" : (event.data.type === STATUS_MESSAGE ? "status" : "stop"),
-      ok: true,
-      response
+      ok: Boolean(response && response.ok !== false),
+      response,
+      snapshot: response?.snapshot || response?.state?.snapshot || null
     }, window.location.origin);
   } catch (error) {
     window.postMessage(

@@ -154,11 +154,41 @@ def current_download_task(display_rows: list[dict]) -> Optional[dict]:
         for task in row["item"].get("download_items", []):
             if task.get("download_status") == "downloading":
                 return {
+                    "download_item_id": task.get("download_item_id"),
                     "sku": row["item"].get("sku") or "-",
                     "source_type": task.get("source_type") or "design",
                     "duration_label": task.get("download_duration_label"),
                 }
     return None
+
+
+def current_download_task_from_orders(orders: list[dict]) -> Optional[dict]:
+    for order in orders:
+        for item in order.get("items", []):
+            for task in item.get("download_items", []):
+                if task.get("download_status") == "downloading":
+                    return {
+                        "download_item_id": task.get("download_item_id"),
+                        "sku": item.get("sku") or "-",
+                        "source_type": task.get("source_type") or "design",
+                        "duration_label": task.get("download_duration_label"),
+                    }
+    return None
+
+
+def batch_download_actions(batch: dict, counts: dict[str, int]) -> dict[str, bool]:
+    has_pending_work = int(counts["pending"]) + int(counts["failed"]) > 0
+    has_downloading = int(counts["downloading"]) > 0
+    can_start = (
+        batch["status"] != "needs_fix"
+        and has_pending_work
+        and not has_downloading
+    )
+    return {
+        "can_start_extension": can_start,
+        "can_retry_failed": int(counts["failed"]) > 0 and not has_downloading,
+        "can_refresh": True,
+    }
 
 
 def refresh_batch_status_after_extension_update(batch_id: int) -> None:
@@ -379,7 +409,8 @@ def reset_user_password(request: Request, user_id: int, password: str = Form("")
 def batch_detail(request: Request, batch_id: int):
     user = require_user(request)
     batch = require_batch_access(batch_id, user)
-    if recover_stale_extension_downloads(batch_id):
+    stale_recovered_count = recover_stale_extension_downloads(batch_id)
+    if stale_recovered_count:
         batch = require_batch_access(batch_id, user)
     orders = db.get_batch_orders(batch_id)
     enrich_order_download_durations(orders)
@@ -459,6 +490,7 @@ def batch_detail(request: Request, batch_id: int):
             batch_archive_ready=batch_archive_ready,
             error_labels=ERROR_LABELS,
             import_summary=import_summary,
+            stale_recovered_count=stale_recovered_count,
         ),
     )
 
@@ -467,9 +499,19 @@ def batch_detail(request: Request, batch_id: int):
 def batch_status(request: Request, batch_id: int):
     user = require_user(request)
     batch = require_batch_access(batch_id, user)
-    if recover_stale_extension_downloads(batch_id):
+    stale_recovered_count = recover_stale_extension_downloads(batch_id)
+    if stale_recovered_count:
         batch = require_batch_access(batch_id, user)
-    return {"batch": batch, "status_counts": db.get_batch_status_counts(batch_id)}
+    orders = db.get_batch_orders(batch_id)
+    enrich_order_download_durations(orders)
+    counts = db.get_batch_status_counts(batch_id)
+    return {
+        "batch": batch,
+        "status_counts": counts,
+        "current_task": current_download_task_from_orders(orders),
+        "stale_recovered_count": stale_recovered_count,
+        "actions": batch_download_actions(batch, counts),
+    }
 
 
 @app.get("/api/extension/batches/{batch_id}/download-items")
