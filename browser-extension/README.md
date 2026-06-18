@@ -58,6 +58,27 @@ If Chrome downloads an HTML page or another non-image file, the extension delete
 that bad local file and marks the item as failed. Retry failed items from the Web
 batch page; do not click continue in Chrome's download bar.
 
+## Experimental download pipeline
+
+The default Drive download pipeline still fetches media through the extension
+and passes an object URL to Chrome downloads. To test whether Chrome can stream
+Drive media directly through the downloads manager with OAuth headers, open the
+extension service worker console and run:
+
+```js
+chrome.storage.local.set({ downloadPipeline: "headers" });
+```
+
+Then reload the extension and retry a small batch. To return to the default
+pipeline:
+
+```js
+chrome.storage.local.remove("downloadPipeline");
+```
+
+Use the experimental pipeline only for internal validation until it has covered
+single images, folders, shared drive files, and permission failures.
+
 ## Web permissions
 
 The first internal version uses broad `http://*/*` and `https://*/*` host permissions so the same unpacked extension can connect to the deployment domain and local test URLs. Narrow these permissions to the production domain before wider distribution.

@@ -9,6 +9,8 @@ const DOWNLOAD_RETRY_DELAYS_MS = [3000, 8000, 15000];
 const DOWNLOAD_WAIT_TIMEOUT_MS = 30 * 60 * 1000;
 const DOWNLOAD_POLL_INTERVAL_MS = 1000;
 const DOWNLOAD_ITEM_HEARTBEAT_MS = 30 * 1000;
+const DOWNLOAD_PIPELINE_BLOB = "blob";
+const DOWNLOAD_PIPELINE_HEADERS = "headers";
 const RETRIABLE_DOWNLOAD_ERRORS = new Set([
   "NETWORK_FAILED",
   "NETWORK_TIMEOUT",
@@ -381,6 +383,17 @@ function googleDriveDownloadUrl(fileId) {
   return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`;
 }
 
+function googleDriveApiMediaUrl(fileId) {
+  return `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`;
+}
+
+async function getDownloadPipeline() {
+  const state = await chrome.storage.local.get({ downloadPipeline: DOWNLOAD_PIPELINE_BLOB });
+  return state.downloadPipeline === DOWNLOAD_PIPELINE_HEADERS
+    ? DOWNLOAD_PIPELINE_HEADERS
+    : DOWNLOAD_PIPELINE_BLOB;
+}
+
 function isImageMetadata(file) {
   return String(file?.mimeType || "").toLowerCase().startsWith(IMAGE_MIME_PREFIX);
 }
@@ -501,7 +514,7 @@ async function blobToDownloadUrl(blob) {
 
 async function fetchDriveMediaAsDownloadUrl(file, token) {
   const label = fileLabel(file);
-  const url = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`;
+  const url = googleDriveApiMediaUrl(file.id);
   const response = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` }
   });
@@ -520,6 +533,38 @@ async function fetchDriveMediaAsDownloadUrl(file, token) {
   }
 
   return blobToDownloadUrl(await response.blob());
+}
+
+async function prepareDriveHeadersDownloadOptions(file, filename, token) {
+  return {
+    downloadOptions: {
+      url: googleDriveApiMediaUrl(file.id),
+      filename,
+      headers: [
+        {
+          name: "Authorization",
+          value: `Bearer ${token}`
+        }
+      ]
+    },
+    cleanup: () => {}
+  };
+}
+
+async function prepareDriveBlobDownloadOptions(file, filename, token) {
+  const prepared = await fetchDriveMediaAsDownloadUrl(file, token);
+  return {
+    downloadOptions: { url: prepared.url, filename },
+    cleanup: prepared.cleanup
+  };
+}
+
+async function prepareDriveDownloadOptions(file, filename, token) {
+  const pipeline = await getDownloadPipeline();
+  if (pipeline === DOWNLOAD_PIPELINE_HEADERS) {
+    return prepareDriveHeadersDownloadOptions(file, filename, token);
+  }
+  return prepareDriveBlobDownloadOptions(file, filename, token);
 }
 
 async function listFolderImages(folderId, token) {
@@ -724,11 +769,7 @@ async function downloadDriveFileByApi(file, task, token) {
     file,
     filename,
     prepareDownloadOptions: async () => {
-      const prepared = await fetchDriveMediaAsDownloadUrl(file, token);
-      return {
-        downloadOptions: { url: prepared.url, filename },
-        cleanup: prepared.cleanup
-      };
+      return prepareDriveDownloadOptions(file, filename, token);
     }
   });
   return {
