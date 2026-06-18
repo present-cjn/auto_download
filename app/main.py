@@ -46,6 +46,31 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 SESSION_COOKIE = "app_session"
 
 
+STATUS_LABELS = {
+    "pending": "等待",
+    "parsing": "解析中",
+    "review_ready": "已解析",
+    "needs_fix": "需修正",
+    "downloading": "下载中",
+    "downloaded": "成功",
+    "failed": "失败",
+    "completed": "已完成",
+    "completed_with_errors": "有失败项",
+    "skipped": "已跳过",
+    "manual_done": "手动完成",
+}
+
+
+WORK_STATE_LABELS = {
+    "action_required": "需要处理",
+    "running": "下载中",
+    "ready": "可开始",
+    "blocked": "需修正",
+    "complete": "已完成",
+    "waiting": "处理中",
+}
+
+
 def initial_admin_credentials() -> Tuple[str, str]:
     return (
         os.getenv("ADMIN_USERNAME", "admin"),
@@ -98,6 +123,76 @@ def template_context(user: dict, **extra):
     context = {"current_user": user}
     context.update(extra)
     return context
+
+
+def batch_work_state(batch: dict, counts: dict[str, int]) -> dict[str, str]:
+    pending_or_failed = int(counts["pending"]) + int(counts["failed"])
+    if batch["status"] == "needs_fix":
+        return {
+            "code": "blocked",
+            "label": WORK_STATE_LABELS["blocked"],
+            "next_action": "修正表格后重新上传",
+        }
+    if batch["status"] in {"parsing", "pending"}:
+        return {
+            "code": "waiting",
+            "label": WORK_STATE_LABELS["waiting"],
+            "next_action": "等待解析完成",
+        }
+    if int(counts["downloading"]) > 0 or batch["status"] == "downloading":
+        return {
+            "code": "running",
+            "label": WORK_STATE_LABELS["running"],
+            "next_action": "查看进度或停止本批次",
+        }
+    if int(counts["failed"]) > 0:
+        return {
+            "code": "action_required",
+            "label": WORK_STATE_LABELS["action_required"],
+            "next_action": "重试失败项或标记已处理",
+        }
+    if pending_or_failed > 0 and batch["status"] == "review_ready":
+        return {
+            "code": "ready",
+            "label": WORK_STATE_LABELS["ready"],
+            "next_action": "开始下载待处理项",
+        }
+    return {
+        "code": "complete",
+        "label": WORK_STATE_LABELS["complete"],
+        "next_action": "下载订单 ZIP 或归档",
+    }
+
+
+def enrich_batch_work_queue(batches: list[dict]) -> list[dict]:
+    priority = {
+        "action_required": 1,
+        "running": 2,
+        "ready": 3,
+        "blocked": 4,
+        "waiting": 5,
+        "complete": 6,
+    }
+    enriched = []
+    for batch in batches:
+        counts = db.get_batch_status_counts(int(batch["id"]))
+        work_state = batch_work_state(batch, counts)
+        row = {
+            **batch,
+            "status_label": STATUS_LABELS.get(batch["status"], batch["status"]),
+            "status_counts": counts,
+            "work_state": work_state,
+            "pending_or_failed_count": int(counts["pending"]) + int(counts["failed"]),
+            "handled_count": int(counts["downloaded"]) + int(counts["manual_done"]),
+        }
+        enriched.append(row)
+    return sorted(
+        enriched,
+        key=lambda row: (
+            priority.get(row["work_state"]["code"], 99),
+            -int(row["id"]),
+        ),
+    )
 
 
 def sort_rows_by_excel_row(rows: list[dict]) -> list[dict]:
@@ -188,6 +283,41 @@ def batch_download_actions(batch: dict, counts: dict[str, int]) -> dict[str, boo
         "can_start_extension": can_start,
         "can_retry_failed": int(counts["failed"]) > 0 and not has_downloading,
         "can_refresh": True,
+    }
+
+
+def batch_primary_action(batch: dict, counts: dict[str, int]) -> dict[str, str]:
+    work_state = batch_work_state(batch, counts)
+    actions = batch_download_actions(batch, counts)
+    if work_state["code"] == "blocked":
+        title = "导入预检未通过"
+        body = "修正必填字段或重复 SKU 后重新上传。"
+        cta = "查看预检问题"
+    elif work_state["code"] == "running":
+        title = "正在下载素材"
+        body = "插件正在处理当前批次。下载中可停止本批次，其他处理动作会暂时禁用。"
+        cta = "查看当前下载"
+    elif actions["can_retry_failed"]:
+        title = "有失败项需要处理"
+        body = "失败项已集中列在下方。可以重试失败项，或确认已人工处理后标记完成。"
+        cta = "处理失败项"
+    elif actions["can_start_extension"]:
+        title = "批次已准备好"
+        body = "确认订单、SKU、Design Link 和 Mockup Link 后，开始下载待处理项。"
+        cta = "开始下载待处理项"
+    elif work_state["code"] == "complete":
+        title = "批次已完成"
+        body = "当前没有待处理下载项。可以下载 ZIP 或查看明细。"
+        cta = "下载订单 ZIP"
+    else:
+        title = "批次处理中"
+        body = "系统正在处理导入或状态恢复，请稍后刷新。"
+        cta = "刷新状态"
+    return {
+        **work_state,
+        "title": title,
+        "body": body,
+        "cta": cta,
     }
 
 
@@ -302,10 +432,11 @@ def logout(request: Request):
 @app.get("/")
 def index(request: Request):
     user = require_user(request)
+    batches = enrich_batch_work_queue(db.list_batches_for_user(user))
     return templates.TemplateResponse(
         request=request,
         name="index.html",
-        context=template_context(user, batches=db.list_batches_for_user(user)),
+        context=template_context(user, batches=batches),
     )
 
 
@@ -444,6 +575,14 @@ def batch_detail(request: Request, batch_id: int):
     current_task = current_download_task(display_rows)
     status_counts = db.get_batch_status_counts(batch_id)
     handled_count = int(batch["success_count"]) + int(status_counts["manual_done"])
+    primary_action = batch_primary_action(batch, status_counts)
+    filter_counts = {
+        "all": len(display_rows),
+        "failed": sum(1 for row in display_rows if row["item"].get("download_status") == "failed"),
+        "downloading": sum(1 for row in display_rows if row["item"].get("download_status") == "downloading"),
+        "pending": sum(1 for row in display_rows if row["item"].get("download_status") == "pending"),
+        "completed": sum(1 for row in display_rows if row["item"].get("download_status") == "downloaded"),
+    }
     progress_percent = 0
     if int(batch["link_count"]) > 0:
         progress_percent = round(
@@ -461,19 +600,6 @@ def batch_detail(request: Request, batch_id: int):
         import_summary = build_import_summary(
             item for order in orders for item in order["items"]
         )
-    status_labels = {
-        "pending": "等待",
-        "parsing": "解析中",
-        "review_ready": "已解析",
-        "needs_fix": "需修正",
-        "downloading": "下载中",
-        "downloaded": "成功",
-        "failed": "失败",
-        "completed": "已完成",
-        "completed_with_errors": "有失败项",
-        "skipped": "已跳过",
-        "manual_done": "手动完成",
-    }
     return templates.TemplateResponse(
         request=request,
         name="batch_detail.html",
@@ -484,13 +610,15 @@ def batch_detail(request: Request, batch_id: int):
             failed_rows=failed_rows,
             current_task=current_task,
             status_counts=status_counts,
-            status_labels=status_labels,
+            status_labels=STATUS_LABELS,
             handled_count=handled_count,
             progress_percent=progress_percent,
             batch_archive_ready=batch_archive_ready,
             error_labels=ERROR_LABELS,
             import_summary=import_summary,
             stale_recovered_count=stale_recovered_count,
+            primary_action=primary_action,
+            filter_counts=filter_counts,
         ),
     )
 

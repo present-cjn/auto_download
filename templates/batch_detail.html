@@ -85,6 +85,30 @@
   </div>
 </section>
 
+<section class="next-action-panel work-{{ primary_action.code }}">
+  <div>
+    <span class="eyebrow">下一步</span>
+    <h2>{{ primary_action.title }}</h2>
+    <p>{{ primary_action.body }}</p>
+  </div>
+  <div class="next-action-controls">
+    {% if primary_action.code == "action_required" %}
+    <a class="button primary" href="#failed-section">{{ primary_action.cta }}</a>
+    {% elif primary_action.code == "running" %}
+    <a class="button primary" href="#extension-panel">{{ primary_action.cta }}</a>
+    {% elif primary_action.code == "ready" %}
+    <a class="button primary" href="#extension-panel">{{ primary_action.cta }}</a>
+    {% elif primary_action.code == "complete" and batch_archive_ready %}
+    <a class="button primary" href="/batches/{{ batch.id }}/download.zip">{{ primary_action.cta }}</a>
+    {% elif primary_action.code == "blocked" %}
+    <a class="button primary" href="#preflight-panel">{{ primary_action.cta }}</a>
+    {% else %}
+    <a class="button primary" href="#extension-panel">{{ primary_action.cta }}</a>
+    {% endif %}
+    <a class="button subtle" href="#order-detail-section">查看 SKU 明细</a>
+  </div>
+</section>
+
 <section class="metrics">
   <div><span>{{ batch.order_count }}</span><label>订单</label></div>
   <div><span>{{ batch.item_count }}</span><label>SKU 明细</label></div>
@@ -115,7 +139,7 @@
   </div>
 </section>
 
-<section class="extension-panel">
+<section class="extension-panel" id="extension-panel">
   <div class="section-heading">
     <h2>插件下载</h2>
     <p>当前使用浏览器插件下载到本机，文件会保存到 Downloads/auto-download/batch-{{ batch.id }}/SKU/。</p>
@@ -417,7 +441,7 @@
 {% endif %}
 
 {% if import_summary %}
-<section class="preflight-panel">
+<section class="preflight-panel" id="preflight-panel">
   <div class="section-heading">
     <h2>导入预检</h2>
     <p>用于提前发现表格和链接风险；必填缺失或 SKU 重复会阻止下载。</p>
@@ -460,7 +484,7 @@
 {% endif %}
 
 {% if failed_rows %}
-<section class="review-section">
+<section class="review-section" id="failed-section">
   <div class="section-heading">
     <h2>失败项</h2>
     <p>{{ failed_rows|length }} 条需要重试或手动处理。</p>
@@ -498,7 +522,10 @@
             {% endif %}
             {{ task.download_error or "下载失败，需要检查链接或手动下载" }}
             {% if task.download_error_detail %}
-            <div class="diagnostic-detail">{{ task.download_error_detail[:500] }}</div>
+            <details class="diagnostic-detail">
+              <summary>诊断详情</summary>
+              <pre>{{ task.download_error_detail[:500] }}</pre>
+            </details>
             {% endif %}
           </td>
           <td>{{ download_task_actions(task, False) }}</td>
@@ -510,10 +537,17 @@
 </section>
 {% endif %}
 
-<section class="review-section">
+<section class="review-section" id="order-detail-section">
   <div class="section-heading">
     <h2>订单明细</h2>
     <p>图片按 SKU 文件夹下载；同一订单下的多条 SKU 会用同一组底色和左侧标识展示。</p>
+  </div>
+  <div class="filter-tabs" aria-label="SKU 状态筛选">
+    <button class="filter-tab active" type="button" data-filter="all">全部 {{ filter_counts.all }}</button>
+    <button class="filter-tab" type="button" data-filter="failed">失败 {{ filter_counts.failed }}</button>
+    <button class="filter-tab" type="button" data-filter="downloading">处理中 {{ filter_counts.downloading }}</button>
+    <button class="filter-tab" type="button" data-filter="pending">待处理 {{ filter_counts.pending }}</button>
+    <button class="filter-tab" type="button" data-filter="completed">已完成 {{ filter_counts.completed }}</button>
   </div>
   <div class="table-wrap compact">
     <table>
@@ -537,7 +571,10 @@
       <tbody>
         {% for row in display_rows %}
         {% set item = row.item %}
-        <tr class="{% if row.is_multi_order %}multi-order-row group-{{ row.order_group_index }}{% endif %} {% if item.download_status == 'failed' %}row-failed{% endif %}">
+        <tr
+          class="order-detail-row {% if row.is_multi_order %}multi-order-row group-{{ row.order_group_index }}{% endif %} {% if item.download_status == 'failed' %}row-failed{% endif %}"
+          data-download-status="{{ item.download_status }}"
+        >
           <td class="order-cell">
             <span>{{ row.order.order_no }}</span>
             {% if row.is_multi_order %}
@@ -580,5 +617,41 @@
       </tbody>
     </table>
   </div>
+  <p class="filter-empty" id="order-filter-empty" hidden>当前筛选下没有 SKU 明细。</p>
 </section>
+<script>
+  (function () {
+    var tabs = Array.prototype.slice.call(document.querySelectorAll(".filter-tab"));
+    var rows = Array.prototype.slice.call(document.querySelectorAll(".order-detail-row"));
+    var empty = document.getElementById("order-filter-empty");
+    if (!tabs.length || !rows.length) {
+      return;
+    }
+    function applyFilter(filter) {
+      var visibleCount = 0;
+      rows.forEach(function (row) {
+        var status = row.dataset.downloadStatus || "";
+        var normalized = status === "downloaded" || status === "manual_done" ? "completed" : status;
+        var visible = filter === "all" || normalized === filter;
+        row.hidden = !visible;
+        if (visible) {
+          visibleCount += 1;
+        }
+      });
+      if (empty) {
+        empty.hidden = visibleCount > 0;
+      }
+      tabs.forEach(function (tab) {
+        var active = tab.dataset.filter === filter;
+        tab.classList.toggle("active", active);
+        tab.setAttribute("aria-pressed", active ? "true" : "false");
+      });
+    }
+    tabs.forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        applyFilter(tab.dataset.filter || "all");
+      });
+    });
+  }());
+</script>
 {% endblock %}

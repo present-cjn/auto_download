@@ -3,8 +3,8 @@
 {% block content %}
 <section class="page-header">
   <div>
-    <h1>批次列表</h1>
-    <p>上传订单 Excel 后先进入核对页，确认无误后再开始下载 Design Link 图片。</p>
+    <h1>批次工作队列</h1>
+    <p>优先处理有失败项、下载中和可开始的批次；已完成批次会排在后面。</p>
   </div>
   <a class="button primary" href="/uploads/new">上传 Excel</a>
 </section>
@@ -16,10 +16,12 @@
       <tr>
         <th>批次</th>
         <th>文件</th>
-        <th>状态</th>
+        <th>工作状态</th>
+        <th>下一步</th>
         <th>订单</th>
         <th>明细</th>
         <th>链接</th>
+        <th>待处理</th>
         <th>成功</th>
         <th>失败</th>
         {% if current_user.role == "admin" %}<th>上传人</th>{% endif %}
@@ -31,10 +33,15 @@
       <tr>
         <td><a href="/batches/{{ batch.id }}">#{{ batch.id }}</a></td>
         <td>{{ batch.file_name }}</td>
-        <td><span class="status {{ batch.status }}">{{ batch.status }}</span></td>
+        <td>
+          <span class="status work-{{ batch.work_state.code }}">{{ batch.work_state.label }}</span>
+          <span class="status {{ batch.status }}">{{ batch.status_label }}</span>
+        </td>
+        <td>{{ batch.work_state.next_action }}</td>
         <td>{{ batch.order_count }}</td>
         <td>{{ batch.item_count }}</td>
         <td>{{ batch.link_count }}</td>
+        <td>{{ batch.pending_or_failed_count }}</td>
         <td>{{ batch.success_count }}</td>
         <td>{{ batch.failed_count }}</td>
         {% if current_user.role == "admin" %}<td>{{ batch.created_by_username or "历史批次" }}</td>{% endif %}

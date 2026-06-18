@@ -8,9 +8,18 @@
   </div>
 </section>
 
+<section class="workflow upload-workflow" aria-label="导入流程">
+  <div class="step active">1. 上传表格</div>
+  <div class="step">2. 预检核对</div>
+  <div class="step">3. 插件下载</div>
+  <div class="step">4. 处理失败项</div>
+  <div class="step">5. 下载 ZIP</div>
+</section>
+
 <form class="upload-panel" method="post" action="/uploads" enctype="multipart/form-data">
   <label for="file">选择订单表</label>
   <input id="file" name="file" type="file" accept=".xlsx" required>
+  <p class="form-helper">上传后系统只做解析和预检。确认无误后，再在批次工作台启动插件下载。</p>
   <button class="button primary" type="submit">上传并解析</button>
 </form>
 {% endblock %}

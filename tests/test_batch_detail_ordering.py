@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 
 from app.main import (
+    batch_primary_action,
+    batch_work_state,
     enrich_download_task_duration,
     format_duration_seconds,
     sort_rows_by_excel_row,
@@ -42,3 +44,35 @@ def test_download_duration_labels() -> None:
 
     assert downloaded["download_duration_label"] == "耗时 1m 7s"
     assert downloading["download_duration_label"] == "已用时 9s"
+
+
+def test_batch_work_state_prioritizes_failed_items() -> None:
+    batch = {"status": "completed_with_errors"}
+    counts = {
+        "pending": 0,
+        "failed": 2,
+        "downloading": 0,
+    }
+
+    state = batch_work_state(batch, counts)
+    action = batch_primary_action(batch, counts)
+
+    assert state["code"] == "action_required"
+    assert state["label"] == "需要处理"
+    assert action["title"] == "有失败项需要处理"
+    assert action["cta"] == "处理失败项"
+
+
+def test_batch_primary_action_for_ready_batch() -> None:
+    batch = {"status": "review_ready"}
+    counts = {
+        "pending": 3,
+        "failed": 0,
+        "downloading": 0,
+    }
+
+    action = batch_primary_action(batch, counts)
+
+    assert action["code"] == "ready"
+    assert action["title"] == "批次已准备好"
+    assert action["cta"] == "开始下载待处理项"
