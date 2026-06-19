@@ -64,7 +64,7 @@ def test_download_status_and_error_fields(tmp_path: Path) -> None:
             batch_id,
             [
                 order_item(
-                    mockup_link="https://drive.google.com/drive/folders/folder123"
+                    mockup_link="https://drive.google.com/drive/folders/mockup123"
                 )
             ],
         )
@@ -96,6 +96,33 @@ def test_download_status_and_error_fields(tmp_path: Path) -> None:
         assert manual_done is not None
         assert manual_done["status"] == "manual_done"
         assert manual_done["error_code"] is None
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_duplicate_mockup_link_is_not_inserted_as_download_item(tmp_path: Path) -> None:
+    database_path = tmp_path / "app.db"
+    original_path = db.DB_PATH
+    db.DB_PATH = database_path
+    try:
+        db.init_db(database_path)
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"))
+        link = "https://drive.google.com/drive/folders/folder123"
+        db.insert_import_items(
+            batch_id,
+            [
+                order_item(
+                    design_link=link,
+                    mockup_link=f" {link} ",
+                )
+            ],
+        )
+
+        items = db.get_pending_download_items(batch_id)
+
+        assert len(items) == 1
+        assert items[0]["source_type"] == "design"
+        assert items[0]["design_link"] == link
     finally:
         db.DB_PATH = original_path
 

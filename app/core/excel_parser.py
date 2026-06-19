@@ -19,7 +19,6 @@ REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 DEFAULT_SHEET = "12"
 VISIBLE_SHEET_STATES = {"visible", ""}
 REQUIRED_IMPORT_FIELDS = [
-    "order_date_raw",
     "order_no",
     "sku",
     "design_link",

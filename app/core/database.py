@@ -815,10 +815,11 @@ def insert_import_items(batch_id: int, items: list[OrderItemRow]) -> None:
                 ),
             )
             order_item_id = int(cursor.lastrowid)
-            download_links = [
-                ("design", item.design_link),
-                ("mockup", item.mockup_link),
-            ]
+            design_link = (item.design_link or "").strip()
+            mockup_link = (item.mockup_link or "").strip()
+            download_links = [("design", design_link)]
+            if mockup_link and mockup_link != design_link:
+                download_links.append(("mockup", mockup_link))
             for source_type, source_url in download_links:
                 if not source_url:
                     continue
