@@ -892,6 +892,44 @@ select {
   margin-top: 4px;
 }
 
+.extension-diagnostics {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
+.extension-diagnostics[hidden] {
+  display: none;
+}
+
+.extension-diagnostics div {
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  min-width: 0;
+  padding: 10px;
+}
+
+.extension-diagnostics span {
+  display: block;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.extension-diagnostics label {
+  color: var(--muted);
+  display: block;
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+@media (max-width: 720px) {
+  .extension-diagnostics {
+    grid-template-columns: 1fr;
+  }
+}
+
 .extension-copy {
   align-items: center;
   display: flex;

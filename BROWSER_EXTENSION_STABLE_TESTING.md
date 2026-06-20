@@ -5,13 +5,25 @@
 ## 版本定位
 
 - 适用范围：内部测试，面向少量操作员。
-- Web 分支：`master`。
+- 稳定版 Web 分支：`master`；当前诊断增强开发分支见下文。
 - 插件形态：Chrome unpacked extension，不是 CRX，也不是 Chrome Web Store 发布版。
 - 固定插件 ID：`nodoinolmkijilpcgncdcglmplkleaie`。
 - 默认 Web 地址：`https://dev.waysing.cn`。
 - 当前不把浏览器下载文件回传服务器；文件保存到用户本机 Downloads。
 
 当前 HTTPS 入口使用腾讯云/DNSPod + 源站 Nginx HTTPS。`dev.waysing.cn` 的 DNS A 记录需要指向服务器公网 IP，服务器安全组需要放行 TCP `80` 和 `443`。
+
+## 项目基础信息
+
+- Web 服务：FastAPI + SQLite，服务器路径 `/opt/auto_download`。
+- Web 页面：上传 Excel、查看批次、重试失败项、查看下载状态。
+- Chrome 插件：在操作员本机下载 Google Drive 图片，并把结果回报给 Web 服务。
+- 数据库：`data/app.db`。
+- 上传文件：`data/uploads/`。
+- 默认测试域名：`https://dev.waysing.cn`。
+- 当前开发分支：`feature/extension-state-machine-v1`。
+
+服务器负责批次、任务、状态和记录；插件负责真正下载图片。下载结果最终写入 `download_items` / `downloaded_files`。Chrome downloads 历史不能作为唯一诊断依据，后续排障以插件 `eventLog` 为主。
 
 ## 当前内部稳定版记录
 
@@ -48,15 +60,17 @@
 
 ## 服务器更新
 
-在服务器执行：
+当前诊断增强分支在服务器执行：
 
 ```bash
 cd /opt/auto_download
 sudo -u auto-download git fetch origin
-sudo -u auto-download git switch feature/browser-extension-downloader
-sudo -u auto-download git pull
-sudo -u auto-download /opt/auto_download/.venv/bin/python -m pip install -r requirements.txt
+sudo -u auto-download git checkout feature/extension-state-machine-v1
+sudo -u auto-download git pull --ff-only origin feature/extension-state-machine-v1
+sudo -u auto-download .venv/bin/python -m pytest tests/test_extension_api.py tests/test_tasks_and_database.py
 sudo systemctl restart auto-download
+sudo systemctl status auto-download --no-pager
+curl -i --max-time 10 https://dev.waysing.cn/health
 ```
 
 确认服务：
@@ -68,7 +82,13 @@ curl -i --max-time 15 "https://dev.waysing.cn/api/extension/batches/3/download-i
 sudo journalctl -u auto-download -n 80 --no-pager
 ```
 
-未登录访问插件 API 时，正常结果通常是 `303 See Other` 跳到登录页。如果是 `404`，说明服务端代码不是当前 `master` 或服务未重启。
+未登录访问插件 API 时，正常结果通常是 `303 See Other` 跳到登录页。如果是 `404`，说明服务端代码不是当前目标分支或服务未重启。
+
+本次诊断增强不需要数据库迁移。如果后续版本包含迁移，先确认代码是否自动 migrate；不要手动修改 `data/app.db`，除非实现方明确给出 SQL 和备份步骤。操作前建议备份：
+
+```bash
+sudo -u auto-download cp data/app.db data/app.db.bak-$(date +%Y%m%d-%H%M%S)
+```
 
 ## 本机插件更新
 
@@ -77,11 +97,13 @@ sudo journalctl -u auto-download -n 80 --no-pager
 ```bash
 cd /media/hzbz/dataset/project/auto_download
 git fetch origin
-git switch master
-git pull
+git switch feature/extension-state-machine-v1
+git pull --ff-only origin feature/extension-state-machine-v1
 ```
 
 插件 manifest 已包含固定 public `key` 和 Chrome Extension OAuth client ID，不需要同事本机替换。
+
+如果只改服务器代码，远程 pull 并 restart 即可。如果改了 `browser-extension/` 里的插件代码，服务器更新还不够，操作员本机也必须更新插件目录并在 `chrome://extensions` 点击 Reload。当前是 unpacked/internal test 模式，不要提交 `.pem`，也不要随意删除或替换 `browser-extension/manifest.json` 里的固定 key/OAuth client。
 
 Chrome 中操作：
 
@@ -123,6 +145,29 @@ Downloads/auto-download/batch-<batch_id>/<sku>/
 
 9. 刷新 Web 批次页，确认下载项状态、失败原因和图片数量。
 
+上线后基础检查：
+
+1. 打开 `https://dev.waysing.cn/health`，应返回 `{"status":"ok"}`。
+2. 打开一个测试批次页，确认页面能加载。
+3. Chrome 插件 popup 里确认 baseUrl 是 `https://dev.waysing.cn`。
+4. 插件 Service Worker Console 检查：
+
+```js
+chrome.storage.local.get(null, console.log)
+```
+
+如果启用 headers 下载管线：
+
+```js
+chrome.storage.local.set({ downloadPipeline: "headers" })
+```
+
+恢复默认 blob 管线：
+
+```js
+chrome.storage.local.remove("downloadPipeline")
+```
+
 ## 验收标准
 
 内部测试稳定版的最低验收：
@@ -135,6 +180,19 @@ Downloads/auto-download/batch-<batch_id>/<sku>/
 - 点击停止后，当前下载项会标记失败，并可从 Web 批次页重试。
 - 如果 Chrome 下载到 HTML 或非图片文件，插件会删除错误文件并标记失败。
 - 正式输出只看 SKU 目录，不依赖 Downloads 根目录的孤立文件。
+
+本次诊断增强的重点验收：
+
+- 文件夹下载时，页面和插件 popup 能显示当前第几张/共几张和当前文件名。
+- 长时间无动作时，可以从 `eventLog` 看到卡在哪个阶段。
+- Drive API / Web API 不会无限等待。
+- Chrome 下载长时间无进展会 cancel 并重试或失败。
+
+Service Worker Console 诊断命令：
+
+```js
+chrome.storage.local.get(["eventLog", "currentStage", "currentFileName", "currentFileIndex", "currentFileTotal", "lastProgressAt"], console.log)
+```
 
 ## 常见问题
 
@@ -166,7 +224,7 @@ await chrome.cookies.get({ url: "https://dev.waysing.cn", name: "app_session" })
 
 ### 插件 API 返回 `404`
 
-服务器未运行当前 `master` 或未重启服务。检查：
+服务器未运行当前目标分支或未重启服务。检查：
 
 ```bash
 cd /opt/auto_download

@@ -6,6 +6,11 @@ const processedEl = document.getElementById("processed");
 const doneEl = document.getElementById("done");
 const failedEl = document.getElementById("failed");
 const currentSkuEl = document.getElementById("currentSku");
+const currentStageEl = document.getElementById("currentStage");
+const currentFileProgressEl = document.getElementById("currentFileProgress");
+const currentFileNameEl = document.getElementById("currentFileName");
+const currentBytesEl = document.getElementById("currentBytes");
+const lastProgressAtEl = document.getElementById("lastProgressAt");
 const lastFailureEl = document.getElementById("lastFailure");
 const messageEl = document.getElementById("message");
 const startButton = document.getElementById("start");
@@ -23,6 +28,32 @@ const PHASE_LABELS = {
 };
 const STARTABLE_PHASES = new Set(["ready", "stopped", "completed", "failed"]);
 let currentPhase = "idle";
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!bytes) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB", "GB"];
+  let size = bytes;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  return `${size.toFixed(unitIndex ? 1 : 0)} ${units[unitIndex]}`;
+}
+
+function formatTime(value) {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+  return date.toLocaleString();
+}
 
 function phaseFromStoredState(state) {
   if (state.stopping) {
@@ -56,6 +87,13 @@ function snapshotFromStoredState(state) {
           sourceTypeLabel: state.currentSourceType === "mockup" ? "Mockup" : "Design"
         }
       : null,
+    currentStage: state.currentStage || "",
+    currentFileName: state.currentFileName || "",
+    currentFileIndex: Number(state.currentFileIndex || 0),
+    currentFileTotal: Number(state.currentFileTotal || 0),
+    currentBytesReceived: Number(state.currentBytesReceived || 0),
+    currentFileSize: Number(state.currentFileSize || 0),
+    lastProgressAt: state.lastProgressAt || "",
     lastError: state.lastFailureReason
       ? {
           sku: state.lastFailureSku || "",
@@ -81,6 +119,15 @@ function renderSnapshot(snapshot) {
   currentSkuEl.textContent = snapshot.currentTask
     ? `${snapshot.currentTask.sku || "-"}${snapshot.currentTask.sourceTypeLabel ? " · " + snapshot.currentTask.sourceTypeLabel : ""}`
     : "当前没有正在下载的 SKU";
+  currentStageEl.textContent = snapshot.currentStage || "-";
+  currentFileProgressEl.textContent = snapshot.currentFileTotal
+    ? `${snapshot.currentFileIndex || 0}/${snapshot.currentFileTotal}`
+    : "-";
+  currentFileNameEl.textContent = snapshot.currentFileName || "-";
+  currentBytesEl.textContent = snapshot.currentFileSize
+    ? `${formatBytes(snapshot.currentBytesReceived)} / ${formatBytes(snapshot.currentFileSize)}`
+    : formatBytes(snapshot.currentBytesReceived);
+  lastProgressAtEl.textContent = formatTime(snapshot.lastProgressAt);
   lastFailureEl.textContent = snapshot.lastError?.message
     ? `${snapshot.lastError.sku ? snapshot.lastError.sku + ": " : ""}${snapshot.lastError.message}`
     : "本轮暂无失败记录";
@@ -115,6 +162,13 @@ async function loadState() {
     failed: 0,
     currentSku: "",
     currentSourceType: "",
+    currentStage: "",
+    currentFileName: "",
+    currentFileIndex: 0,
+    currentFileTotal: 0,
+    currentBytesReceived: 0,
+    currentFileSize: 0,
+    lastProgressAt: "",
     lastFailureSku: "",
     lastFailureCode: "",
     lastFailureReason: "",

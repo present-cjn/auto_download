@@ -79,6 +79,21 @@ chrome.storage.local.remove("downloadPipeline");
 Use the experimental pipeline only for internal validation until it has covered
 single images, folders, shared drive files, and permission failures.
 
+## Diagnostic event log
+
+The extension writes a lightweight local diagnostic log to `chrome.storage.local`.
+Open the extension Service Worker console and run:
+
+```js
+chrome.storage.local.get(["eventLog", "currentStage", "currentFileName", "currentFileIndex", "currentFileTotal", "lastProgressAt"], console.log);
+```
+
+`eventLog` keeps the latest 200 events, including queue/task boundaries, Drive
+folder listing, per-file starts, Chrome download creation/progress/completion,
+success/failure posts, retries, timeouts, and stalled download detection. Chrome
+downloads history may be incomplete after retries or cleanup; use this extension
+event log as the primary diagnostic record.
+
 ## Web permissions
 
 The first internal version uses broad `http://*/*` and `https://*/*` host permissions so the same unpacked extension can connect to the deployment domain and local test URLs. Narrow these permissions to the production domain before wider distribution.
