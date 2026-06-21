@@ -15,6 +15,7 @@ const WEB_API_TIMEOUT_MS = 60 * 1000;
 const DRIVE_API_TIMEOUT_MS = 120 * 1000;
 const DRIVE_MEDIA_TIMEOUT_MS = 5 * 60 * 1000;
 const EVENT_LOG_LIMIT = 200;
+const RUNTIME_REQUEST_LOG_INTERVAL_MS = 15 * 1000;
 const DOWNLOAD_PIPELINE_BLOB = "blob";
 const DOWNLOAD_PIPELINE_HEADERS = "headers";
 const RETRIABLE_DOWNLOAD_ERRORS = new Set([
@@ -28,6 +29,7 @@ const RETRIABLE_DOWNLOAD_ERRORS = new Set([
   "extension_fetch_timeout"
 ]);
 let activeDownloadResolvers = new Map();
+let lastRuntimeRequestLogAt = new Map();
 let workerRunning = false;
 let stopRequested = false;
 let stopInProgress = false;
@@ -92,6 +94,51 @@ async function recordEvent(event, { task = currentTask, message = "", detail = n
   await chrome.storage.local.set({
     eventLog: [...eventLog, entry].slice(-EVENT_LOG_LIMIT)
   });
+}
+
+function elapsedMs(startedAt) {
+  return Math.max(0, Date.now() - Number(startedAt || Date.now()));
+}
+
+function downloadDiagnosticDetail({
+  file = {},
+  filename = "",
+  attempt = 0,
+  maxAttempts = 0,
+  pipeline = "",
+  prepareStartedAt = 0,
+  extra = {}
+} = {}) {
+  return {
+    target_path: filename,
+    attempt,
+    maxAttempts,
+    pipeline,
+    prepareStartedAt: prepareStartedAt ? new Date(prepareStartedAt).toISOString() : "",
+    elapsedMs: prepareStartedAt ? elapsedMs(prepareStartedAt) : 0,
+    drive_file_id: file.id || "",
+    drive_file_name: file.name || "",
+    ...extra
+  };
+}
+
+function recordRuntimeRequest(event, detail = {}) {
+  const now = Date.now();
+  const shouldLimit = event === "runtime_status_request";
+  const lastLoggedAt = Number(lastRuntimeRequestLogAt.get(event) || 0);
+  if (shouldLimit && now - lastLoggedAt < RUNTIME_REQUEST_LOG_INTERVAL_MS) {
+    return;
+  }
+  lastRuntimeRequestLogAt.set(event, now);
+  recordEvent(event, {
+    message: detail.message || "",
+    detail: {
+      ...detail,
+      phase: workerRunning ? "running" : "idle",
+      activeDownloadId,
+      currentDownloadItemId: currentTask?.download_item_id || ""
+    }
+  }).catch(() => {});
 }
 
 async function setCurrentStage(stage, patch = {}, task = currentTask) {
@@ -707,6 +754,7 @@ async function fetchDriveMediaAsDownloadUrl(file, token) {
 
 async function prepareDriveHeadersDownloadOptions(file, filename, token) {
   return {
+    pipeline: DOWNLOAD_PIPELINE_HEADERS,
     downloadOptions: {
       url: googleDriveApiMediaUrl(file.id),
       filename,
@@ -724,13 +772,26 @@ async function prepareDriveHeadersDownloadOptions(file, filename, token) {
 async function prepareDriveBlobDownloadOptions(file, filename, token) {
   const prepared = await fetchDriveMediaAsDownloadUrl(file, token);
   return {
+    pipeline: DOWNLOAD_PIPELINE_BLOB,
     downloadOptions: { url: prepared.url, filename },
     cleanup: prepared.cleanup
   };
 }
 
-async function prepareDriveDownloadOptions(file, filename, token) {
+async function prepareDriveDownloadOptions(file, filename, token, diagnostic = {}) {
   const pipeline = await getDownloadPipeline();
+  await recordEvent("download_pipeline_selected", {
+    task: diagnostic.task || currentTask,
+    message: pipeline,
+    detail: downloadDiagnosticDetail({
+      file,
+      filename,
+      attempt: diagnostic.attempt,
+      maxAttempts: diagnostic.maxAttempts,
+      pipeline,
+      prepareStartedAt: diagnostic.prepareStartedAt
+    })
+  });
   if (pipeline === DOWNLOAD_PIPELINE_HEADERS) {
     return prepareDriveHeadersDownloadOptions(file, filename, token);
   }
@@ -966,19 +1027,57 @@ chrome.downloads.onChanged.addListener((delta) => {
   }
 });
 
-async function startBrowserDownload(options) {
+async function startBrowserDownload(options, diagnostic = {}) {
   assertNotStopped();
+  await recordEvent("download_call_start", {
+    task: diagnostic.task || currentTask,
+    message: options.filename || "",
+    detail: downloadDiagnosticDetail({
+      file: diagnostic.file,
+      filename: options.filename || diagnostic.filename || "",
+      attempt: diagnostic.attempt,
+      maxAttempts: diagnostic.maxAttempts,
+      pipeline: diagnostic.pipeline,
+      prepareStartedAt: diagnostic.prepareStartedAt,
+      extra: {
+        url: options.url || "",
+        hasHeaders: Array.isArray(options.headers) && options.headers.length > 0
+      }
+    })
+  });
   const downloadId = await chrome.downloads.download({
     conflictAction: "uniquify",
     saveAs: false,
     ...options
+  });
+  await recordEvent("download_call_done", {
+    task: diagnostic.task || currentTask,
+    message: String(downloadId),
+    detail: downloadDiagnosticDetail({
+      file: diagnostic.file,
+      filename: options.filename || diagnostic.filename || "",
+      attempt: diagnostic.attempt,
+      maxAttempts: diagnostic.maxAttempts,
+      pipeline: diagnostic.pipeline,
+      prepareStartedAt: diagnostic.prepareStartedAt,
+      extra: { downloadId }
+    })
   });
   await setCurrentStage("download_created", {
     currentBytesReceived: 0,
     currentFileSize: 0
   });
   await recordEvent("download_created", {
-    detail: { downloadId, filename: options.filename || "", url: options.url || "" },
+    task: diagnostic.task || currentTask,
+    detail: downloadDiagnosticDetail({
+      file: diagnostic.file,
+      filename: options.filename || diagnostic.filename || "",
+      attempt: diagnostic.attempt,
+      maxAttempts: diagnostic.maxAttempts,
+      pipeline: diagnostic.pipeline,
+      prepareStartedAt: diagnostic.prepareStartedAt,
+      extra: { downloadId, url: options.url || "" }
+    }),
     message: options.filename || ""
   });
   await waitForDownload(downloadId);
@@ -999,6 +1098,7 @@ async function downloadWithRetry({ task, file, filename, downloadOptions, prepar
     let currentDownloadOptions = downloadOptions;
     let cleanupDownloadOptions = null;
     try {
+      const prepareStartedAt = Date.now();
       await setCurrentStage("download_prepare_start", {
         currentFileName: label,
         currentBytesReceived: 0,
@@ -1007,20 +1107,62 @@ async function downloadWithRetry({ task, file, filename, downloadOptions, prepar
       await recordEvent("download_prepare_start", {
         task,
         message: label,
-        detail: {
-          target_path: filename,
+        detail: downloadDiagnosticDetail({
+          file,
+          filename,
           attempt,
           maxAttempts,
-          drive_file_id: file.id || "",
-          drive_file_name: file.name || ""
-        }
+          prepareStartedAt
+        })
       });
+      let pipeline = downloadOptions ? "direct" : "";
       if (prepareDownloadOptions) {
-        const prepared = await prepareDownloadOptions();
+        const prepared = await prepareDownloadOptions({
+          attempt,
+          maxAttempts,
+          prepareStartedAt
+        });
         cleanupDownloadOptions = prepared.cleanup || null;
         currentDownloadOptions = prepared.downloadOptions;
+        pipeline = prepared.pipeline || pipeline;
       }
-      const downloadItem = await startBrowserDownload(currentDownloadOptions);
+      await recordEvent("download_options_ready", {
+        task,
+        message: label,
+        detail: downloadDiagnosticDetail({
+          file,
+          filename,
+          attempt,
+          maxAttempts,
+          pipeline,
+          prepareStartedAt,
+          extra: {
+            url: currentDownloadOptions?.url || "",
+            hasHeaders: Array.isArray(currentDownloadOptions?.headers) && currentDownloadOptions.headers.length > 0
+          }
+        })
+      });
+      await recordEvent("download_prepare_done", {
+        task,
+        message: label,
+        detail: downloadDiagnosticDetail({
+          file,
+          filename,
+          attempt,
+          maxAttempts,
+          pipeline,
+          prepareStartedAt
+        })
+      });
+      const downloadItem = await startBrowserDownload(currentDownloadOptions, {
+        task,
+        file,
+        filename,
+        attempt,
+        maxAttempts,
+        pipeline,
+        prepareStartedAt
+      });
       await assertImageDownload(downloadItem, file, label);
       return downloadItem;
     } catch (error) {
@@ -1064,8 +1206,11 @@ async function downloadDriveFileByApi(file, task, token) {
     task,
     file,
     filename,
-    prepareDownloadOptions: async () => {
-      return prepareDriveDownloadOptions(file, filename, token);
+    prepareDownloadOptions: async (diagnostic) => {
+      return prepareDriveDownloadOptions(file, filename, token, {
+        task,
+        ...diagnostic
+      });
     }
   });
   return {
@@ -1496,6 +1641,11 @@ async function runQueue() {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "status") {
+    recordRuntimeRequest("runtime_status_request", {
+      message: String(message.batchId || ""),
+      requestedBatchId: String(message.batchId || ""),
+      senderUrl: sender?.url || sender?.tab?.url || ""
+    });
     getRuntimeState(message.batchId)
       .then((state) => {
         sendResponse(runtimeResponse(state));
@@ -1509,6 +1659,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message.type === "start") {
+    recordRuntimeRequest("runtime_start_request", {
+      senderUrl: sender?.url || sender?.tab?.url || ""
+    });
     startQueue()
       .then((response) => {
         sendResponse(response);
@@ -1522,6 +1675,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message.type === "configureAndStart") {
+    recordRuntimeRequest("runtime_start_request", {
+      message: String(message.batchId || ""),
+      requestedBatchId: String(message.batchId || ""),
+      baseUrl: String(message.baseUrl || ""),
+      senderUrl: sender?.url || sender?.tab?.url || ""
+    });
     configureAndStartQueue(message.baseUrl, message.batchId)
       .then((response) => {
         sendResponse(response);
@@ -1535,6 +1694,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message.type === "pause") {
+    recordRuntimeRequest("runtime_stop_request", {
+      senderUrl: sender?.url || sender?.tab?.url || ""
+    });
     stopDownloads()
       .then((response) => {
         sendResponse(response);
@@ -1548,6 +1710,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message.type === "stop") {
+    recordRuntimeRequest("runtime_stop_request", {
+      senderUrl: sender?.url || sender?.tab?.url || ""
+    });
     stopDownloads()
       .then((response) => {
         sendResponse(response);

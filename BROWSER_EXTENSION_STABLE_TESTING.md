@@ -194,6 +194,28 @@ Service Worker Console 诊断命令：
 chrome.storage.local.get(["eventLog", "currentStage", "currentFileName", "currentFileIndex", "currentFileTotal", "lastProgressAt"], console.log)
 ```
 
+如果卡在 `download_prepare_start`，用下面的表格查看精细时间线：
+
+```js
+chrome.storage.local.get(["eventLog"], ({ eventLog = [] }) => {
+  console.table(eventLog.slice(-100).map(e => ({
+    time: e.time,
+    event: e.event,
+    file: e.detail?.drive_file_name || e.message,
+    elapsedMs: e.detail?.elapsedMs,
+    pipeline: e.detail?.pipeline,
+    detail: JSON.stringify(e.detail || {})
+  })));
+});
+```
+
+重点判断：
+
+- `download_prepare_start -> download_pipeline_selected` 卡住：优先怀疑 storage/API 唤醒或 service worker 执行被挂起。
+- `download_options_ready -> download_call_start` 卡住：优先怀疑代码执行调度异常。
+- `download_call_start -> download_call_done` 卡住：优先怀疑 `chrome.downloads.download()` 调用延迟或 service worker 生命周期影响。
+- `runtime_status_request` 紧贴后续 `download_call_done/download_created`：通常说明打开 popup 或 Web 状态刷新后唤醒了插件继续执行。
+
 ## 常见问题
 
 ### 插件显示 `Failed to fetch`
