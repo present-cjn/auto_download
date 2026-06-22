@@ -215,6 +215,7 @@ chrome.storage.local.get(["eventLog"], ({ eventLog = [] }) => {
 - `download_options_ready -> download_call_start` 卡住：优先怀疑代码执行调度异常。
 - `download_call_start -> download_call_done` 卡住：优先怀疑 `chrome.downloads.download()` 调用延迟或 service worker 生命周期影响。
 - `runtime_status_request` 紧贴后续 `download_call_done/download_created`：通常说明打开 popup 或 Web 状态刷新后唤醒了插件继续执行。
+- `download_filename_suggested` 表示插件已在 Chrome 最终文件名决策阶段强制建议 `auto-download/batch-.../<sku>/...` 路径。
 
 ## 常见问题
 
@@ -273,7 +274,7 @@ sudo systemctl restart auto-download
 
 这是 Chrome downloads API 报告的下载中断。当前插件会对单文件自动重试 4 次。若最终仍失败，Web 失败详情会记录失败文件、attempt 和 Chrome 错误。
 
-如果 Chrome 在 Downloads 根目录留下类似 Drive file ID 命名的孤立文件，可以删除或忽略。正式输出只认：
+如果 Chrome 在 Downloads 根目录留下类似 Drive file ID 命名的孤立文件，先检查 `eventLog` 里是否有 `download_filename_suggested`。没有该事件通常表示本机插件未 Reload 到最新 service worker；有该事件但仍落根目录时，再查 `chrome.downloads.search({ id: downloadId })` 的 `filename/url/finalUrl/byExtensionId`。正式输出只认：
 
 ```text
 Downloads/auto-download/batch-<batch_id>/<sku>/

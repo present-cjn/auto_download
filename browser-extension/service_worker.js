@@ -30,6 +30,8 @@ const RETRIABLE_DOWNLOAD_ERRORS = new Set([
 ]);
 let activeDownloadResolvers = new Map();
 let lastRuntimeRequestLogAt = new Map();
+let pendingDownloadFilenames = new Map();
+let pendingDownloadFilenameByUrl = new Map();
 let workerRunning = false;
 let stopRequested = false;
 let stopInProgress = false;
@@ -120,6 +122,28 @@ function downloadDiagnosticDetail({
     drive_file_name: file.name || "",
     ...extra
   };
+}
+
+function rememberDownloadFilename(downloadId, filename) {
+  if (!downloadId || !filename) {
+    return;
+  }
+  pendingDownloadFilenames.set(downloadId, filename);
+}
+
+function rememberDownloadFilenameForUrl(url, filename) {
+  if (!url || !filename) {
+    return;
+  }
+  pendingDownloadFilenameByUrl.set(url, filename);
+}
+
+function forgetDownloadFilename(downloadId) {
+  pendingDownloadFilenames.delete(downloadId);
+}
+
+function forgetDownloadFilenameForUrl(url) {
+  pendingDownloadFilenameByUrl.delete(url);
 }
 
 function recordRuntimeRequest(event, detail = {}) {
@@ -823,7 +847,7 @@ async function listFolderImages(folderId, token) {
   return files.filter((file) => String(file.mimeType || "").startsWith(IMAGE_MIME_PREFIX));
 }
 
-function waitForDownload(downloadId) {
+function waitForDownload(downloadId, downloadUrl = "") {
   return new Promise((resolve, reject) => {
     const cleanup = () => {
       const resolver = activeDownloadResolvers.get(downloadId);
@@ -834,6 +858,10 @@ function waitForDownload(downloadId) {
         clearInterval(resolver.pollId);
       }
       activeDownloadResolvers.delete(downloadId);
+      forgetDownloadFilename(downloadId);
+      if (resolver?.downloadUrl) {
+        forgetDownloadFilenameForUrl(resolver.downloadUrl);
+      }
       if (activeDownloadId === downloadId) {
         activeDownloadId = null;
       }
@@ -976,6 +1004,7 @@ function waitForDownload(downloadId) {
       reject,
       timeoutId,
       pollId,
+      downloadUrl,
       lastBytesReceived: 0,
       currentFileSize: 0,
       lastProgressAt: Date.now(),
@@ -998,12 +1027,15 @@ chrome.downloads.onChanged.addListener((delta) => {
       clearInterval(resolver.pollId);
     }
     activeDownloadResolvers.delete(delta.id);
+    forgetDownloadFilename(delta.id);
     if (activeDownloadId === delta.id) {
       activeDownloadId = null;
     }
     chrome.downloads.search({ id: delta.id })
       .then((downloads) => {
         const current = downloads[0] || {};
+        forgetDownloadFilenameForUrl(current.url || "");
+        forgetDownloadFilenameForUrl(current.finalUrl || "");
         return recordEvent("download_complete", {
           detail: {
             downloadId: delta.id,
@@ -1024,10 +1056,18 @@ chrome.downloads.onChanged.addListener((delta) => {
       clearInterval(resolver.pollId);
     }
     activeDownloadResolvers.delete(delta.id);
+    forgetDownloadFilename(delta.id);
     if (activeDownloadId === delta.id) {
       activeDownloadId = null;
     }
     const error = new Error(delta.error?.current || "download interrupted");
+    chrome.downloads.search({ id: delta.id })
+      .then((downloads) => {
+        const current = downloads[0] || {};
+        forgetDownloadFilenameForUrl(current.url || "");
+        forgetDownloadFilenameForUrl(current.finalUrl || "");
+      })
+      .catch(() => {});
     recordEvent("download_interrupted", {
       detail: { downloadId: delta.id, chromeError: delta.error?.current || "" },
       message: errorMessage(error)
@@ -1037,8 +1077,36 @@ chrome.downloads.onChanged.addListener((delta) => {
   }
 });
 
+chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
+  const expectedFilename = pendingDownloadFilenames.get(downloadItem.id)
+    || pendingDownloadFilenameByUrl.get(downloadItem.url || "")
+    || pendingDownloadFilenameByUrl.get(downloadItem.finalUrl || "");
+  if (!expectedFilename) {
+    suggest();
+    return;
+  }
+  rememberDownloadFilename(downloadItem.id, expectedFilename);
+  forgetDownloadFilenameForUrl(downloadItem.url || "");
+  forgetDownloadFilenameForUrl(downloadItem.finalUrl || "");
+  recordEvent("download_filename_suggested", {
+    detail: {
+      downloadId: downloadItem.id,
+      expectedFilename,
+      chromeFilename: downloadItem.filename || "",
+      url: downloadItem.url || "",
+      finalUrl: downloadItem.finalUrl || ""
+    },
+    message: expectedFilename
+  }).catch(() => {});
+  suggest({
+    filename: expectedFilename,
+    conflictAction: "uniquify"
+  });
+});
+
 async function startBrowserDownload(options, diagnostic = {}) {
   assertNotStopped();
+  rememberDownloadFilenameForUrl(options.url || "", options.filename || diagnostic.filename || "");
   await recordEvent("download_call_start", {
     task: diagnostic.task || currentTask,
     message: options.filename || "",
@@ -1060,6 +1128,7 @@ async function startBrowserDownload(options, diagnostic = {}) {
     saveAs: false,
     ...options
   });
+  rememberDownloadFilename(downloadId, options.filename || diagnostic.filename || "");
   await recordEvent("download_call_done", {
     task: diagnostic.task || currentTask,
     message: String(downloadId),
@@ -1090,7 +1159,7 @@ async function startBrowserDownload(options, diagnostic = {}) {
     }),
     message: options.filename || ""
   });
-  await waitForDownload(downloadId);
+  await waitForDownload(downloadId, options.url || "");
   const downloads = await chrome.downloads.search({ id: downloadId });
   return downloads[0] || { id: downloadId };
 }
