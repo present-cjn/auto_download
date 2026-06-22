@@ -255,6 +255,28 @@ def test_parse_allows_missing_order_date_header_and_values(tmp_path: Path) -> No
     assert summary["can_start_download"] is True
 
 
+def test_parse_allows_only_sku_and_design_link_for_download_task(tmp_path: Path) -> None:
+    source = tmp_path / "minimal-download.xlsx"
+    write_xlsx(
+        source,
+        [
+            ["SKU", "Design Link"],
+            ["SKU-A", "https://example.com/images/front.jpg"],
+        ],
+    )
+
+    items = parse_order_items(source)
+    summary = build_import_summary(items)
+
+    assert len(items) == 1
+    assert items[0].order_no == "row-2"
+    assert items[0].sku == "SKU-A"
+    assert items[0].design_link == "https://example.com/images/front.jpg"
+    assert summary["missing_required_fields"] == {}
+    assert summary["non_google_drive_link_count"] == 1
+    assert summary["can_start_download"] is True
+
+
 def test_parse_allows_missing_province_header_and_values(tmp_path: Path) -> None:
     source = tmp_path / "without-province.xlsx"
     headers = [header for header in HEADERS if header != "Province"]
@@ -371,6 +393,40 @@ def test_parse_standard_aliases_and_blocking_summary(tmp_path: Path) -> None:
     assert summary["duplicate_sku_count"] == 1
     assert summary["empty_design_link_count"] == 1
     assert summary["missing_required_fields"]["Design Link"] == [2]
+    assert summary["can_start_download"] is False
+
+
+def test_duplicate_sku_warns_without_blocking_download(tmp_path: Path) -> None:
+    source = tmp_path / "duplicate-sku.xlsx"
+    write_xlsx(
+        source,
+        [
+            ["SKU", "Design Link"],
+            ["SKU-A", "https://example.com/a.jpg"],
+            ["SKU-A", "https://example.com/b.jpg"],
+        ],
+    )
+
+    summary = build_import_summary(parse_order_items(source))
+
+    assert summary["duplicate_sku_count"] == 1
+    assert summary["missing_required_fields"] == {}
+    assert summary["can_start_download"] is True
+
+
+def test_missing_sku_still_blocks_download(tmp_path: Path) -> None:
+    source = tmp_path / "missing-sku.xlsx"
+    write_xlsx(
+        source,
+        [
+            ["SKU", "Design Link"],
+            ["", "https://example.com/a.jpg"],
+        ],
+    )
+
+    summary = build_import_summary(parse_order_items(source))
+
+    assert summary["missing_required_fields"]["SKU"] == [2]
     assert summary["can_start_download"] is False
 
 

@@ -17,13 +17,13 @@
 
 - Web 服务：FastAPI + SQLite，服务器路径 `/opt/auto_download`。
 - Web 页面：上传 Excel、查看批次、重试失败项、查看下载状态。
-- Chrome 插件：在操作员本机下载 Google Drive 图片，并把结果回报给 Web 服务。
+- Chrome 插件：在操作员本机下载 Google Drive 图片或普通图片直链，并把结果回报给 Web 服务。
 - 数据库：`data/app.db`。
 - 上传文件：`data/uploads/`。
 - 默认测试域名：`https://dev.waysing.cn`。
 - 当前开发分支：`feature/extension-state-machine-v1`。
 
-服务器负责批次、任务、状态和记录；插件负责真正下载图片。下载结果最终写入 `download_items` / `downloaded_files`。Chrome downloads 历史不能作为唯一诊断依据，后续排障以插件 `eventLog` 为主。
+服务器负责批次、任务、状态和记录；插件负责真正下载图片。当前导入只用 `SKU` 和 `Design Link` 缺失阻止下载，`Mockup Link` 和物流/收件信息可为空。下载结果最终写入 `download_items` / `downloaded_files`。Chrome downloads 历史不能作为唯一诊断依据，后续排障以插件 `eventLog` 为主。
 
 ## 当前内部稳定版记录
 

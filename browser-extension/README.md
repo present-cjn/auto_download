@@ -1,6 +1,6 @@
 # Order Design Downloader Chrome Extension
 
-This unpacked Chrome extension downloads Google Drive order images into local SKU folders and reports status back to the Web app.
+This unpacked Chrome extension downloads Google Drive order images and plain image URLs into local SKU folders, then reports status back to the Web app.
 
 Internal testing extension ID: `nodoinolmkijilpcgncdcglmplkleaie`.
 
@@ -28,6 +28,13 @@ The committed `manifest.json` contains a fixed public `key` and Chrome Extension
 The Chrome extension ID shown in `chrome://extensions` must be `nodoinolmkijilpcgncdcglmplkleaie`, and the Google Cloud Chrome Extension OAuth client must use that same extension ID.
 
 Keep the private `.pem` that generated the manifest key offline with the maintainer. Do not commit or distribute it.
+
+## Plain image URLs
+
+Non-Google image links such as `https://example.com/image.jpg` are downloaded
+directly through Chrome downloads and do not use Google OAuth. The Web app still
+records them as ordinary download items; the extension validates that the final
+download is an image before reporting success.
 
 ## Output
 

@@ -288,6 +288,16 @@ function fileLabel(file) {
   return file.name || file.id || "drive-file";
 }
 
+function directUrlFilename(url, fallback) {
+  try {
+    const parsed = new URL(String(url || ""));
+    const pathPart = decodeURIComponent(parsed.pathname.split("/").filter(Boolean).pop() || "");
+    return sanitizePathPart(pathPart, fallback);
+  } catch (error) {
+    return sanitizePathPart(fallback, "downloaded-image");
+  }
+}
+
 function driveResourceCacheKey(task) {
   if (!task.resource_kind || !task.resource_id || task.resource_kind === "url") {
     return "";
@@ -1255,7 +1265,9 @@ async function downloadSingleFile(task, token) {
     return [await downloadDriveFileByApi(metadata, task, token)];
   }
 
-  const fallbackName = `${task.filename_prefix}drive-file`;
+  const fallbackName = task.resource_id
+    ? `${task.filename_prefix}drive-file`
+    : `${task.filename_prefix}${directUrlFilename(task.url, "image")}`;
   const filename = joinDownloadPath(task.sku_folder, fallbackName);
   const url = task.resource_id ? googleDriveDownloadUrl(task.resource_id) : task.url;
   const downloadItem = await downloadWithRetry({

@@ -375,6 +375,32 @@ def test_extension_download_items_parse_open_id_urls(tmp_path: Path) -> None:
         db.DB_PATH = original_path
 
 
+def test_extension_download_items_keep_plain_image_urls(tmp_path: Path) -> None:
+    original_path, token, batch_id, _ = setup_extension_batch(tmp_path / "app.db")
+    try:
+        request = FakeRequest(token)
+        item = db.get_pending_download_items(batch_id)[0]
+        with db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE download_items
+                SET design_link = ?
+                WHERE id = ?
+                """,
+                (
+                    "https://cdn.example.com/products/front-view.jpg?token=abc",
+                    item["id"],
+                ),
+            )
+
+        payload = extension_download_items(request, batch_id)["items"][0]
+        assert payload["resource_kind"] == "url"
+        assert payload["resource_id"] == ""
+        assert payload["url"] == "https://cdn.example.com/products/front-view.jpg?token=abc"
+    finally:
+        db.DB_PATH = original_path
+
+
 def test_extension_error_labels_include_stop_and_non_image_codes() -> None:
     assert ERROR_LABELS["extension_stopped_by_user"] == "用户停止插件下载"
     assert ERROR_LABELS["extension_non_image_download"] == "插件下载到非图片"

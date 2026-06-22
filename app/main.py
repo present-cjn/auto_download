@@ -291,7 +291,7 @@ def batch_primary_action(batch: dict, counts: dict[str, int]) -> dict[str, str]:
     actions = batch_download_actions(batch, counts)
     if work_state["code"] == "blocked":
         title = "导入预检未通过"
-        body = "修正必填字段或重复 SKU 后重新上传。"
+        body = "补齐 SKU 和 Design Link 后重新上传。"
         cta = "查看预检问题"
     elif work_state["code"] == "running":
         title = "正在下载素材"
@@ -303,7 +303,7 @@ def batch_primary_action(batch: dict, counts: dict[str, int]) -> dict[str, str]:
         cta = "处理失败项"
     elif actions["can_start_extension"]:
         title = "批次已准备好"
-        body = "确认订单、SKU、Design Link 和 Mockup Link 后，开始下载待处理项。"
+        body = "确认 SKU 和下载链接后，开始下载待处理项。"
         cta = "开始下载待处理项"
     elif work_state["code"] == "complete":
         title = "批次已完成"

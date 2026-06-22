@@ -19,14 +19,8 @@ REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 DEFAULT_SHEET = "12"
 VISIBLE_SHEET_STATES = {"visible", ""}
 REQUIRED_IMPORT_FIELDS = [
-    "order_no",
     "sku",
     "design_link",
-    "shipping_fullname",
-    "address",
-    "city",
-    "zip_code",
-    "country",
 ]
 FIELD_LABELS = {
     "order_date_raw": "日期",
@@ -325,7 +319,7 @@ def parse_order_items(excel_path: Path, sheet_name: str = DEFAULT_SHEET) -> list
             if not order_no and not design_link and not sku:
                 continue
             if not order_no:
-                continue
+                order_no = f"row-{row.attrib.get('r', '0') or 0}"
 
             order_date_raw = mapped_value(values, mapping, "order_date_raw")
             items.append(
@@ -431,14 +425,14 @@ def build_import_summary(items: Iterable[Any]) -> dict[str, object]:
     duplicate_skus = {
         sku: rows for sku, rows in sku_rows.items() if len(rows) > 1
     }
-    blocking_issue_count = len(missing_required_fields) + len(duplicate_skus)
+    blocking_issue_count = len(missing_required_fields)
     warnings = []
     if not item_list:
         warnings.append("没有解析到订单明细。")
     if empty_design_link_count:
         warnings.append(f"有 {empty_design_link_count} 行没有 Design Link。")
     if non_google_drive_link_count:
-        warnings.append(f"有 {non_google_drive_link_count} 个链接不是 Google Drive 链接。")
+        warnings.append(f"有 {non_google_drive_link_count} 个链接不是 Google Drive 链接，将按普通图片直链尝试下载。")
     if duplicate_design_link_count:
         warnings.append(f"有 {duplicate_design_link_count} 个重复 Design Link。")
     if duplicate_all_link_count:
@@ -446,7 +440,7 @@ def build_import_summary(items: Iterable[Any]) -> dict[str, object]:
     if multi_sku_order_count:
         warnings.append(f"有 {multi_sku_order_count} 个订单包含多条 SKU。")
     if duplicate_skus:
-        warnings.append(f"有 {len(duplicate_skus)} 个重复 SKU，需要修正后再下载。")
+        warnings.append(f"有 {len(duplicate_skus)} 个重复 SKU，下载文件会保存到同一个 SKU 文件夹。")
     if missing_required_fields:
         warnings.append("有必填字段为空，需要补齐后再下载。")
 

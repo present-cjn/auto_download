@@ -489,11 +489,11 @@
 
 {% if batch.status == "review_ready" %}
 <section class="notice">
-  已解析完成。确认订单、SKU、Design Link 和 Mockup Link 无误后，可以点击“开始/继续下载”。
+  已解析完成。确认 SKU 和下载链接无误后，可以点击“开始/继续下载”。
 </section>
 {% elif batch.status == "needs_fix" %}
 <section class="notice error-block">
-  导入预检未通过。请修正必填字段或重复 SKU 后重新上传。
+  导入预检未通过。请补齐 SKU 和 Design Link 后重新上传。
 </section>
 {% endif %}
 
@@ -505,7 +505,7 @@
 <section class="preflight-panel" id="preflight-panel">
   <div class="section-heading">
     <h2>导入预检</h2>
-    <p>用于提前发现表格和链接风险；必填缺失或 SKU 重复会阻止下载。</p>
+    <p>用于提前发现表格和链接风险；当前只有 SKU 和 Design Link 缺失会阻止下载。</p>
   </div>
   <div class="summary-grid">
     <div><span>{{ import_summary.sheet_name or "-" }}</span><label>工作表</label></div>
