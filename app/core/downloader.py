@@ -71,6 +71,12 @@ ERROR_LABELS = {
     "extension_stopped_by_user": "用户停止插件下载",
     "extension_non_image_download": "插件下载到非图片",
     "extension_google_apps_file": "链接不是原始图片",
+    "drive_not_found_or_permission": "Drive 文件不存在或权限受限",
+    "drive_permission_denied": "Drive 权限受限",
+    "extension_download_interrupted": "浏览器下载中断",
+    "extension_download_timeout": "浏览器下载超时",
+    "extension_download_stalled": "浏览器下载无进展",
+    "extension_fetch_timeout": "插件请求超时",
     "interrupted": "任务中断",
     "unknown_error": "未知错误",
 }

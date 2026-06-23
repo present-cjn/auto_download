@@ -71,6 +71,33 @@ WORK_STATE_LABELS = {
 }
 
 
+def configured_extension_max_attempts() -> int:
+    try:
+        return int(os.getenv("EXTENSION_DOWNLOAD_MAX_ATTEMPTS", "4"))
+    except ValueError:
+        return 4
+
+
+EXTENSION_MAX_ATTEMPTS = configured_extension_max_attempts()
+EXTENSION_RETRYABLE_ERROR_CODES = {
+    "network_error",
+    "download_timeout",
+    "extension_download_failed",
+    "extension_download_interrupted",
+    "extension_download_timeout",
+    "extension_download_stalled",
+    "extension_fetch_timeout",
+}
+EXTENSION_NON_RETRYABLE_ERROR_CODES = {
+    "extension_stopped_by_user",
+    "extension_non_image_download",
+    "extension_google_apps_file",
+    "invalid_drive_url",
+    "drive_not_found_or_permission",
+    "drive_permission_denied",
+}
+
+
 def initial_admin_credentials() -> Tuple[str, str]:
     return (
         os.getenv("ADMIN_USERNAME", "admin"),
@@ -365,6 +392,8 @@ def extension_download_item_payload(item: dict[str, Any]) -> dict[str, Any]:
         "url": item["design_link"],
         "filename_prefix": f"{source_type}-{item['id']}-",
         "status": item["status"],
+        "attempt_count": int(item.get("attempt_count") or 0),
+        "max_attempts": extension_max_attempts(),
     }
     payload.update(drive_resource_payload(str(item["design_link"])))
     return payload
@@ -372,6 +401,75 @@ def extension_download_item_payload(item: dict[str, Any]) -> dict[str, Any]:
 
 def request_json_dict(body: Any) -> dict[str, Any]:
     return body if isinstance(body, dict) else {}
+
+
+def extension_max_attempts() -> int:
+    return max(1, EXTENSION_MAX_ATTEMPTS)
+
+
+def normalize_extension_raw_error(data: dict[str, Any]) -> tuple[str, str, str]:
+    raw_code = str(
+        data.get("raw_error_code")
+        or data.get("error_code")
+        or "extension_download_failed"
+    )
+    raw_message = str(
+        data.get("raw_error_message")
+        or data.get("error_message")
+        or "浏览器插件下载失败。"
+    )
+    raw_detail = str(
+        data.get("raw_error_detail")
+        or data.get("error_detail")
+        or raw_message
+    )
+    return raw_code, raw_message, raw_detail
+
+
+def classify_extension_failure(data: dict[str, Any]) -> dict[str, str | bool]:
+    raw_code, raw_message, raw_detail = normalize_extension_raw_error(data)
+    combined = f"{raw_code} {raw_message} {raw_detail}".lower()
+    if raw_code == "extension_stopped_by_user" or "用户停止" in combined:
+        code = "extension_stopped_by_user"
+        message = "用户停止了插件下载。"
+    elif raw_code in {"extension_non_image_download", "extension_google_apps_file"}:
+        code = raw_code
+        message = (
+            "链接指向 Google 在线文件，不是原始图片。"
+            if raw_code == "extension_google_apps_file"
+            else "插件下载到了非图片文件。"
+        )
+    elif "google apps" in combined or "application/vnd.google-apps" in combined:
+        code = "extension_google_apps_file"
+        message = "链接指向 Google 在线文件，不是原始图片。"
+    elif "non_image" in combined or "不是图片" in combined or "html" in combined:
+        code = "extension_non_image_download"
+        message = "插件下载到了非图片文件。"
+    elif "404" in combined or "403" in combined or "permission" in combined or "权限" in combined:
+        code = "drive_not_found_or_permission"
+        message = "Drive 文件不存在或当前 Google 账号没有访问权限。"
+    elif "timeout" in combined or "stalled" in combined or "超时" in combined:
+        code = "download_timeout"
+        message = "浏览器下载超时或长时间没有进展。"
+    elif "network" in combined or "server_unreachable" in combined:
+        code = "network_error"
+        message = "浏览器网络连接失败，可稍后重试。"
+    else:
+        code = raw_code if raw_code else "extension_download_failed"
+        message = raw_message or "浏览器插件下载失败。"
+    retryable = code in EXTENSION_RETRYABLE_ERROR_CODES and code not in EXTENSION_NON_RETRYABLE_ERROR_CODES
+    return {
+        "code": code,
+        "message": message,
+        "detail": raw_detail,
+        "retryable": retryable,
+    }
+
+
+def should_retry_extension_failure(item: dict, classified: dict[str, str | bool]) -> bool:
+    if not bool(classified["retryable"]):
+        return False
+    return int(item.get("attempt_count") or 0) < extension_max_attempts()
 
 
 @app.on_event("startup")
@@ -661,6 +759,49 @@ def extension_download_items(request: Request, batch_id: int, limit: int = 50):
     }
 
 
+@app.post("/api/extension/batches/{batch_id}/next-download-item")
+def extension_next_download_item(request: Request, batch_id: int):
+    user = require_user(request)
+    batch = require_batch_access(batch_id, user)
+    if recover_stale_extension_downloads(batch_id):
+        batch = require_batch_access(batch_id, user)
+    if batch["status"] == "needs_fix":
+        raise HTTPException(status_code=400, detail="导入预检未通过，请先修正表格后重新上传。")
+
+    item = db.get_next_extension_download_item(
+        batch_id,
+        EXTENSION_RETRYABLE_ERROR_CODES,
+        extension_max_attempts(),
+    )
+    if not item:
+        counts = db.get_batch_status_counts(batch_id)
+        refresh_batch_status_after_extension_update(batch_id)
+        return {
+            "ok": True,
+            "item": None,
+            "status_counts": counts,
+            "max_attempts": extension_max_attempts(),
+        }
+
+    dispatched = db.dispatch_download_item(int(item["id"]))
+    if not dispatched:
+        raise HTTPException(status_code=409, detail="Download item could not be dispatched")
+    refresh_batch_status_after_extension_update(batch_id)
+    db.record_extension_event(
+        batch_id=batch_id,
+        download_item_id=int(dispatched["id"]),
+        event="item_dispatched",
+        message=f"attempt {int(dispatched.get('attempt_count') or 0)}/{extension_max_attempts()}",
+        detail={"download_item_id": int(dispatched["id"])},
+    )
+    return {
+        "ok": True,
+        "item": extension_download_item_payload(dispatched),
+        "status_counts": db.get_batch_status_counts(batch_id),
+        "max_attempts": extension_max_attempts(),
+    }
+
+
 @app.post("/api/extension/download-items/{download_item_id}/start")
 def extension_start_download_item(request: Request, download_item_id: int):
     user = require_user(request)
@@ -735,24 +876,77 @@ def extension_download_item_failure(
     except (TypeError, ValueError):
         partial_image_count = len(files)
     partial_image_count = max(0, partial_image_count)
-    error_code = str(data.get("error_code") or "extension_download_failed")
-    error_message = str(data.get("error_message") or "浏览器插件下载失败。")
-    error_detail = str(data.get("error_detail") or "")
+    classified = classify_extension_failure(data)
+    error_code = str(classified["code"])
+    error_message = str(classified["message"])
+    error_detail = str(classified["detail"] or "")
     if files:
         db.replace_downloaded_files_for_item(download_item_id, files)
-    db.mark_download_failed(
-        download_item_id,
-        error_message,
-        error_code=error_code,
-        error_detail=error_detail,
-        image_count=partial_image_count,
+    if should_retry_extension_failure(item, classified):
+        db.mark_download_retry_pending(
+            download_item_id,
+            error_message,
+            error_code=error_code,
+            error_detail=error_detail,
+            image_count=partial_image_count,
+        )
+        final_status = "pending"
+    else:
+        db.mark_download_failed(
+            download_item_id,
+            error_message,
+            error_code=error_code,
+            error_detail=error_detail,
+            image_count=partial_image_count,
+        )
+        final_status = "failed"
+    db.record_extension_event(
+        batch_id=int(item["batch_id"]),
+        download_item_id=download_item_id,
+        event="item_failure",
+        level="warning",
+        message=error_message,
+        detail={
+            "raw": data,
+            "classified_code": error_code,
+            "final_status": final_status,
+            "attempt_count": int(item.get("attempt_count") or 0),
+            "max_attempts": extension_max_attempts(),
+        },
     )
     refresh_batch_status_after_extension_update(int(item["batch_id"]))
     return {
         "ok": True,
         "download_item_id": download_item_id,
         "partial_image_count": partial_image_count,
+        "status": final_status,
+        "error_code": error_code,
+        "retryable": final_status == "pending",
     }
+
+
+@app.post("/api/extension/events")
+def extension_events(request: Request, body: Any = Body(default=None)):
+    user = require_user(request)
+    data = request_json_dict(body)
+    batch_id = int(data.get("batch_id") or 0)
+    if batch_id <= 0:
+        raise HTTPException(status_code=400, detail="batch_id is required")
+    require_batch_access(batch_id, user)
+    download_item_id = data.get("download_item_id")
+    try:
+        download_item_id = int(download_item_id) if download_item_id else None
+    except (TypeError, ValueError):
+        download_item_id = None
+    event_id = db.record_extension_event(
+        batch_id=batch_id,
+        download_item_id=download_item_id,
+        event=str(data.get("event") or "event"),
+        level=str(data.get("level") or "info"),
+        message=str(data.get("message") or ""),
+        detail=data.get("detail") if isinstance(data.get("detail"), dict) else None,
+    )
+    return {"ok": True, "event_id": event_id}
 
 
 @app.post("/batches/{batch_id}/start-download")

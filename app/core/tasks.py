@@ -296,6 +296,7 @@ def start_download(batch_id: int) -> None:
 
 
 def retry_failed(batch_id: int) -> None:
+    db.reset_failed_attempts(batch_id)
     process_download_items(batch_id, failed_only=True)
 
 
@@ -304,10 +305,12 @@ def start_download_limited(batch_id: int, limit: Optional[int]) -> None:
 
 
 def retry_failed_limited(batch_id: int, limit: Optional[int]) -> None:
+    db.reset_failed_attempts(batch_id, limit)
     process_download_items(batch_id, failed_only=True, limit=limit)
 
 
 def retry_download_item(download_item_id: int) -> None:
+    db.reset_download_attempts(download_item_id)
     process_download_item(download_item_id)
 
 

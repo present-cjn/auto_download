@@ -5,7 +5,7 @@ const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const IMAGE_MIME_PREFIX = "image/";
 const GOOGLE_APPS_MIME_PREFIX = "application/vnd.google-apps.";
 const GOOGLE_APPS_FOLDER_MIME = "application/vnd.google-apps.folder";
-const DOWNLOAD_RETRY_DELAYS_MS = [3000, 8000, 15000];
+const DOWNLOAD_RETRY_DELAYS_MS = [3000];
 const DOWNLOAD_WAIT_TIMEOUT_MS = 30 * 60 * 1000;
 const DOWNLOAD_POLL_INTERVAL_MS = 1000;
 const DOWNLOAD_ITEM_HEARTBEAT_MS = 30 * 1000;
@@ -96,6 +96,7 @@ async function recordEvent(event, { task = currentTask, message = "", detail = n
   await chrome.storage.local.set({
     eventLog: [...eventLog, entry].slice(-EVENT_LOG_LIMIT)
   });
+  postExtensionEvent(entry).catch(() => {});
 }
 
 function elapsedMs(startedAt) {
@@ -568,6 +569,26 @@ async function apiFetch(baseUrl, path, options = {}) {
     throw new Error(`Web API ${response.status}: ${text.slice(0, 300)}`);
   }
   return response.json();
+}
+
+async function postExtensionEvent(entry) {
+  const config = await getConfig();
+  const batchId = entry.batchId || config.batchId;
+  if (!config.baseUrl || !batchId) {
+    return;
+  }
+  await apiFetch(config.baseUrl, "/api/extension/events", {
+    method: "POST",
+    body: JSON.stringify({
+      batch_id: Number(batchId),
+      download_item_id: entry.downloadItemId ? Number(entry.downloadItemId) : null,
+      event: entry.event || "event",
+      level: entry.event && String(entry.event).includes("failure") ? "warning" : "info",
+      message: entry.message || "",
+      detail: entry.detail || {}
+    }),
+    timeoutMs: WEB_API_TIMEOUT_MS
+  });
 }
 
 function startDownloadItemHeartbeat(baseUrl, downloadItemId) {
@@ -1460,10 +1481,6 @@ async function processTask(baseUrl, task) {
       task,
       message: `${task.sku} · ${task.source_type}`
     });
-    await apiFetch(baseUrl, `/api/extension/download-items/${task.download_item_id}/start`, {
-      method: "POST",
-      body: JSON.stringify({})
-    });
     stopHeartbeat = startDownloadItemHeartbeat(baseUrl, task.download_item_id);
     await setStatus({
       phase: "running",
@@ -1527,9 +1544,11 @@ async function processTask(baseUrl, task) {
     await apiFetch(baseUrl, `/api/extension/download-items/${task.download_item_id}/failure`, {
       method: "POST",
       body: JSON.stringify({
-        error_code: errorCode,
-        error_message: errorSummary,
-        error_detail: failureReason,
+        raw_error_code: errorCode,
+        raw_error_message: errorSummary,
+        raw_error_detail: failureReason,
+        chrome_error: error?.chromeError || errorMessage(error),
+        stage: (await chrome.storage.local.get({ currentStage: "" })).currentStage || "",
         files: partialFiles,
         partial_image_count: partialImageCount
       })
@@ -1628,7 +1647,6 @@ async function runQueue() {
   stopRequested = false;
   stopInProgress = false;
   driveResourceMetadataCache = new Map();
-  const attemptedIds = new Set();
   await setStatus({
     phase: "running",
     running: true,
@@ -1665,31 +1683,29 @@ async function runQueue() {
       }
       const payload = await apiFetch(
         config.baseUrl,
-        `/api/extension/batches/${encodeURIComponent(config.batchId)}/download-items?limit=20`
+        `/api/extension/batches/${encodeURIComponent(config.batchId)}/next-download-item`,
+        {
+          method: "POST",
+          body: JSON.stringify({})
+        }
       );
-      const items = (payload.items || []).filter((item) => !attemptedIds.has(item.download_item_id));
-      if (!items.length) {
+      const task = payload.item || null;
+      if (!task) {
         await setStatus({ phase: "completed", state: "已完成", message: "没有待下载项。" });
         break;
       }
-      for (const task of items) {
-        if (stopRequested) {
+      await processTask(config.baseUrl, task);
+      await incrementProcessedCount();
+      if (stopRequested) {
+        break;
+      }
+      try {
+        await interruptibleSleep(randomDelayMs());
+      } catch (error) {
+        if (isStopError(error)) {
           break;
         }
-        attemptedIds.add(task.download_item_id);
-        await processTask(config.baseUrl, task);
-        await incrementProcessedCount();
-        if (stopRequested) {
-          break;
-        }
-        try {
-          await interruptibleSleep(randomDelayMs());
-        } catch (error) {
-          if (isStopError(error)) {
-            break;
-          }
-          throw error;
-        }
+        throw error;
       }
     }
     if (stopRequested) {

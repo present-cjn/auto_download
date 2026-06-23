@@ -10,10 +10,12 @@ from app.core.excel_parser import OrderItemRow
 from app.core.security import hash_password, new_session_token, session_expiry_string
 from app.main import (
     batch_status,
+    extension_events,
     extension_download_item_heartbeat,
     extension_download_item_failure,
     extension_download_item_success,
     extension_download_items,
+    extension_next_download_item,
     extension_start_download_item,
 )
 
@@ -133,9 +135,9 @@ def test_extension_success_and_failure_update_download_state(tmp_path: Path) -> 
             request,
             mockup_id,
             {
-                "error_code": "extension_download_failed",
-                "error_message": "插件失败",
-                "error_detail": "Drive API 403",
+                "raw_error_code": "extension_google_apps_file",
+                "raw_error_message": "链接指向 Google 在线文件。",
+                "raw_error_detail": "application/vnd.google-apps.document",
                 "files": [
                     {
                         "file_name": "mockup-partial.jpg",
@@ -150,7 +152,7 @@ def test_extension_success_and_failure_update_download_state(tmp_path: Path) -> 
         assert failed["partial_image_count"] == 1
         mockup = db.get_download_item(mockup_id)
         assert mockup["status"] == "failed"
-        assert mockup["error_message"] == "插件失败"
+        assert mockup["error_code"] == "extension_google_apps_file"
         assert mockup["image_count"] == 1
         with db.connect() as conn:
             files = conn.execute(
@@ -167,6 +169,137 @@ def test_extension_success_and_failure_update_download_state(tmp_path: Path) -> 
         counts = db.get_batch_status_counts(batch_id)
         assert counts["downloaded"] == 1
         assert counts["failed"] == 1
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_extension_next_download_item_dispatches_one_item(tmp_path: Path) -> None:
+    original_path, token, batch_id, _ = setup_extension_batch(tmp_path / "app.db")
+    try:
+        request = FakeRequest(token)
+
+        first = extension_next_download_item(request, batch_id)
+        assert first["ok"] is True
+        assert first["item"]["source_type"] == "design"
+        first_id = first["item"]["download_item_id"]
+        first_db = db.get_download_item(first_id)
+        assert first_db["status"] == "downloading"
+        assert first_db["attempt_count"] == 1
+
+        second = extension_next_download_item(request, batch_id)
+        assert second["item"]["source_type"] == "mockup"
+        assert second["item"]["download_item_id"] != first_id
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_extension_failure_retries_retryable_errors_server_side(tmp_path: Path) -> None:
+    original_path, token, batch_id, _ = setup_extension_batch(tmp_path / "app.db")
+    try:
+        request = FakeRequest(token)
+        payload = extension_next_download_item(request, batch_id)
+        download_item_id = payload["item"]["download_item_id"]
+
+        failed = extension_download_item_failure(
+            request,
+            download_item_id,
+            {
+                "raw_error_code": "extension_download_stalled",
+                "raw_error_message": "Chrome 下载长时间没有进展。",
+                "raw_error_detail": "Chrome download stalled",
+            },
+        )
+
+        assert failed["status"] == "pending"
+        assert failed["retryable"] is True
+        item = db.get_download_item(download_item_id)
+        assert item["status"] == "pending"
+        assert item["error_code"] == "download_timeout"
+
+        redispatched = extension_next_download_item(request, batch_id)
+        assert redispatched["item"]["download_item_id"] == download_item_id
+        assert db.get_download_item(download_item_id)["attempt_count"] == 2
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_extension_failure_stops_retrying_at_max_attempts(tmp_path: Path) -> None:
+    original_path, token, batch_id, _ = setup_extension_batch(tmp_path / "app.db")
+    try:
+        request = FakeRequest(token)
+        payload = extension_next_download_item(request, batch_id)
+        download_item_id = payload["item"]["download_item_id"]
+        with db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE download_items
+                SET attempt_count = 4
+                WHERE id = ?
+                """,
+                (download_item_id,),
+            )
+
+        failed = extension_download_item_failure(
+            request,
+            download_item_id,
+            {
+                "raw_error_code": "extension_download_stalled",
+                "raw_error_message": "Chrome 下载长时间没有进展。",
+            },
+        )
+
+        assert failed["status"] == "failed"
+        assert failed["retryable"] is False
+        item = db.get_download_item(download_item_id)
+        assert item["status"] == "failed"
+        assert item["error_code"] == "download_timeout"
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_extension_failure_keeps_non_retryable_errors_failed(tmp_path: Path) -> None:
+    original_path, token, batch_id, _ = setup_extension_batch(tmp_path / "app.db")
+    try:
+        request = FakeRequest(token)
+        payload = extension_next_download_item(request, batch_id)
+        download_item_id = payload["item"]["download_item_id"]
+
+        failed = extension_download_item_failure(
+            request,
+            download_item_id,
+            {
+                "raw_error_code": "extension_google_apps_file",
+                "raw_error_message": "链接指向 Google 在线文件。",
+            },
+        )
+
+        assert failed["status"] == "failed"
+        assert failed["error_code"] == "extension_google_apps_file"
+        assert db.get_download_item(download_item_id)["status"] == "failed"
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_extension_events_records_remote_diagnostics(tmp_path: Path) -> None:
+    original_path, token, batch_id, _ = setup_extension_batch(tmp_path / "app.db")
+    try:
+        request = FakeRequest(token)
+        response = extension_events(
+            request,
+            {
+                "batch_id": batch_id,
+                "event": "download_created",
+                "level": "info",
+                "message": "SKU-A",
+                "detail": {"stage": "download_created"},
+            },
+        )
+
+        assert response["ok"] is True
+        events = db.list_extension_events(batch_id)
+        assert events[0]["event"] == "download_created"
+        assert events[0]["message"] == "SKU-A"
+        assert '"stage": "download_created"' in events[0]["detail_json"]
     finally:
         db.DB_PATH = original_path
 

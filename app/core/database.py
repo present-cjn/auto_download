@@ -27,6 +27,7 @@ CREATE TABLE download_items (
     error_message TEXT,
     error_code TEXT,
     error_detail TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
     started_at TEXT,
     heartbeat_at TEXT,
     completed_at TEXT,
@@ -45,6 +46,19 @@ CREATE TABLE downloaded_files (
     file_name TEXT NOT NULL,
     local_path TEXT NOT NULL,
     file_size INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+EXTENSION_EVENTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS extension_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL REFERENCES import_batches(id) ON DELETE CASCADE,
+    download_item_id INTEGER REFERENCES download_items(id) ON DELETE SET NULL,
+    event TEXT NOT NULL,
+    level TEXT NOT NULL DEFAULT 'info',
+    message TEXT,
+    detail_json TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 """
@@ -125,7 +139,7 @@ def migrate_download_items_schema(conn: sqlite3.Connection) -> None:
         INSERT OR IGNORE INTO download_items (
             id, batch_id, order_id, order_item_id, order_no, row_number, sku,
             design_link, source_type, status, image_count, error_message, error_code,
-            error_detail, started_at, heartbeat_at, completed_at, created_at
+            error_detail, attempt_count, started_at, heartbeat_at, completed_at, created_at
         )
         SELECT
             di.id,
@@ -142,6 +156,7 @@ def migrate_download_items_schema(conn: sqlite3.Connection) -> None:
             di.error_message,
             {error_code_expression},
             {error_detail_expression},
+            0,
             di.started_at,
             NULL,
             di.completed_at,
@@ -153,7 +168,7 @@ def migrate_download_items_schema(conn: sqlite3.Connection) -> None:
 
     conn.executescript(DOWNLOADED_FILES_SCHEMA)
     if downloaded_file_columns:
-        conn.execute(
+        cursor = conn.execute(
             """
             INSERT OR IGNORE INTO downloaded_files (
                 id, download_item_id, batch_id, order_id, order_no,
@@ -186,6 +201,12 @@ def ensure_schema_columns(conn: sqlite3.Connection) -> None:
         ensure_column(conn, "download_items", "error_code", "error_code TEXT")
         ensure_column(conn, "download_items", "error_detail", "error_detail TEXT")
         ensure_column(conn, "download_items", "heartbeat_at", "heartbeat_at TEXT")
+        ensure_column(
+            conn,
+            "download_items",
+            "attempt_count",
+            "attempt_count INTEGER NOT NULL DEFAULT 0",
+        )
         if "source_type" not in table_columns(conn, "download_items"):
             migrate_download_items_schema(conn)
     if table_columns(conn, "order_items"):
@@ -391,6 +412,7 @@ def init_db(db_path: Optional[Path] = None) -> None:
         migrate_download_items_schema(conn)
         conn.executescript(USERS_SCHEMA)
         conn.executescript(SESSIONS_SCHEMA)
+        conn.executescript(EXTENSION_EVENTS_SCHEMA)
         conn.executescript(
             f"""
             CREATE TABLE IF NOT EXISTS import_batches (
@@ -467,6 +489,7 @@ def init_db(db_path: Optional[Path] = None) -> None:
                 error_message TEXT,
                 error_code TEXT,
                 error_detail TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
                 started_at TEXT,
                 heartbeat_at TEXT,
                 completed_at TEXT,
@@ -1024,6 +1047,49 @@ def get_extension_download_items(batch_id: int, limit: int = 50) -> list[dict[st
         return [row_to_dict(row) for row in rows]
 
 
+def get_next_extension_download_item(
+    batch_id: int,
+    retryable_error_codes: set[str],
+    max_attempts: int,
+) -> Optional[dict[str, Any]]:
+    max_attempts = max(1, int(max_attempts))
+    with connect() as conn:
+        retryable_codes = sorted(code for code in retryable_error_codes if code)
+        failed_clause = ""
+        params: list[Any] = [batch_id]
+        if retryable_codes:
+            placeholders = ",".join("?" for _ in retryable_codes)
+            failed_clause = f"""
+                OR (
+                    di.status = 'failed'
+                    AND COALESCE(di.attempt_count, 0) < ?
+                    AND di.error_code IN ({placeholders})
+                )
+            """
+            params.append(max_attempts)
+            params.extend(retryable_codes)
+        row = conn.execute(
+            f"""
+            SELECT
+                di.*,
+                oi.sku AS item_sku
+            FROM download_items di
+            JOIN order_items oi ON oi.id = di.order_item_id
+            WHERE di.batch_id = ?
+              AND (
+                di.status = 'pending'
+                {failed_clause}
+              )
+            ORDER BY
+                CASE di.status WHEN 'pending' THEN 1 WHEN 'failed' THEN 2 ELSE 3 END,
+                di.id
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+        return row_to_dict(row) if row else None
+
+
 def get_failed_download_items(batch_id: int) -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
@@ -1083,7 +1149,7 @@ def get_batch_status_counts(batch_id: int) -> dict[str, int]:
 
 def mark_download_started(download_item_id: int) -> None:
     with connect() as conn:
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE download_items
             SET status = 'downloading', error_message = NULL,
@@ -1094,6 +1160,36 @@ def mark_download_started(download_item_id: int) -> None:
             """,
             (download_item_id,),
         )
+
+
+def dispatch_download_item(download_item_id: int) -> Optional[dict[str, Any]]:
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE download_items
+            SET status = 'downloading', error_message = NULL,
+                error_code = NULL, error_detail = NULL, image_count = 0,
+                attempt_count = COALESCE(attempt_count, 0) + 1,
+                started_at = CURRENT_TIMESTAMP, heartbeat_at = CURRENT_TIMESTAMP,
+                completed_at = NULL
+            WHERE id = ? AND status IN ('pending', 'failed')
+            """,
+            (download_item_id,),
+        )
+        if cursor.rowcount == 0:
+            return None
+        row = conn.execute(
+            """
+            SELECT
+                di.*,
+                oi.sku AS item_sku
+            FROM download_items di
+            JOIN order_items oi ON oi.id = di.order_item_id
+            WHERE di.id = ?
+            """,
+            (download_item_id,),
+        ).fetchone()
+        return row_to_dict(row) if row else None
 
 
 def mark_download_heartbeat(download_item_id: int) -> bool:
@@ -1146,6 +1242,63 @@ def mark_download_failed(
                 image_count,
                 download_item_id,
             ),
+        )
+
+
+def mark_download_retry_pending(
+    download_item_id: int,
+    error_message: str,
+    error_code: Optional[str] = None,
+    error_detail: Optional[str] = None,
+    image_count: Optional[int] = None,
+) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE download_items
+            SET status = 'pending', error_message = ?,
+                error_code = ?, error_detail = ?, image_count = COALESCE(?, image_count),
+                completed_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                error_message[:1000],
+                error_code,
+                error_detail[:4000] if error_detail else None,
+                image_count,
+                download_item_id,
+            ),
+        )
+
+
+def reset_download_attempts(download_item_id: int) -> None:
+    with connect() as conn:
+        conn.execute(
+            "UPDATE download_items SET attempt_count = 0 WHERE id = ?",
+            (download_item_id,),
+        )
+
+
+def reset_failed_attempts(batch_id: int, limit: Optional[int] = None) -> None:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id
+            FROM download_items
+            WHERE batch_id = ? AND status = 'failed'
+            ORDER BY id
+            """,
+            (batch_id,),
+        ).fetchall()
+        item_ids = [int(row["id"]) for row in rows]
+        if limit is not None and limit > 0:
+            item_ids = item_ids[:limit]
+        if not item_ids:
+            return
+        placeholders = ",".join("?" for _ in item_ids)
+        conn.execute(
+            f"UPDATE download_items SET attempt_count = 0 WHERE id IN ({placeholders})",
+            item_ids,
         )
 
 
@@ -1239,3 +1392,51 @@ def replace_downloaded_files_for_item(
                     max(0, file_size),
                 ),
             )
+
+
+def record_extension_event(
+    batch_id: int,
+    download_item_id: Optional[int],
+    event: str,
+    level: str = "info",
+    message: str = "",
+    detail: Optional[dict[str, Any]] = None,
+) -> int:
+    safe_level = level if level in {"debug", "info", "warning", "error"} else "info"
+    detail_json = None
+    if detail is not None:
+        detail_json = json.dumps(detail, ensure_ascii=False, default=str)[:8000]
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO extension_events (
+                batch_id, download_item_id, event, level, message, detail_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                batch_id,
+                download_item_id,
+                str(event or "event")[:120],
+                safe_level,
+                str(message or "")[:1000],
+                detail_json,
+            ),
+        )
+        return int(cursor.lastrowid)
+
+
+def list_extension_events(batch_id: int, limit: int = 100) -> list[dict[str, Any]]:
+    limit = max(1, min(int(limit), 500))
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM extension_events
+            WHERE batch_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (batch_id, limit),
+        ).fetchall()
+        return [row_to_dict(row) for row in rows]
