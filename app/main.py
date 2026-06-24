@@ -37,6 +37,7 @@ from app.core.tasks import (
     start_download_limited,
     start_background,
 )
+from scripts.download_speed_report import build_speed_report, format_seconds
 
 
 app = FastAPI(title="Order Design Image Downloader")
@@ -717,6 +718,23 @@ def batch_detail(request: Request, batch_id: int):
             stale_recovered_count=stale_recovered_count,
             primary_action=primary_action,
             filter_counts=filter_counts,
+        ),
+    )
+
+
+@app.get("/batches/{batch_id}/speed-report")
+def batch_speed_report(request: Request, batch_id: int):
+    user = require_user(request)
+    batch = require_batch_access(batch_id, user)
+    report = build_speed_report(batch_id, db.DB_PATH, slow_limit=20)
+    return templates.TemplateResponse(
+        request=request,
+        name="speed_report.html",
+        context=template_context(
+            user,
+            batch=batch,
+            report=report,
+            format_seconds=format_seconds,
         ),
     )
 

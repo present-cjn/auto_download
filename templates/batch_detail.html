@@ -77,6 +77,7 @@
     <p>{{ batch.file_name }} · {{ status_badge(batch.status) }}</p>
   </div>
   <div class="actions">
+    <a class="button subtle" href="/batches/{{ batch.id }}/speed-report">速度报告</a>
     {% if batch_archive_ready %}
     <a class="button subtle" href="/batches/{{ batch.id }}/download.zip">一键下载全部订单</a>
     {% else %}

@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}速度报告 #{{ batch.id }}{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <h1>速度报告 #{{ batch.id }}</h1>
+    <p>{{ batch.file_name }} · 基于插件诊断事件统计</p>
+  </div>
+  <div class="actions">
+    <a class="button subtle" href="/batches/{{ batch.id }}">返回批次</a>
+  </div>
+</section>
+
+{% if report.event_count == 0 %}
+<section class="notice">
+  当前批次还没有插件诊断事件。请先在批次页使用插件下载，再查看速度报告。
+</section>
+{% else %}
+<section class="metrics">
+  <div><span>{{ format_seconds(report.queue_seconds) }}</span><label>队列耗时</label></div>
+  <div><span>{{ report.download_item_count }}</span><label>下载项</label></div>
+  <div><span>{{ report.event_count }}</span><label>事件</label></div>
+  <div><span>{{ report.retry_count }}</span><label>重试次数</label></div>
+  <div><span>{{ report.incomplete_item_count }}</span><label>未完成项</label></div>
+</section>
+
+<section class="review-section">
+  <div class="section-heading">
+    <h2>阶段耗时</h2>
+    <p>用于判断瓶颈在任务处理、Drive 文件夹列目录还是 Chrome 下载。</p>
+  </div>
+  <div class="table-wrap compact">
+    <table>
+      <thead>
+        <tr>
+          <th>阶段</th>
+          <th>样本</th>
+          <th>平均</th>
+          <th>中位数</th>
+          <th>P95</th>
+          <th>最大</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for label, summary in [
+          ("下载项总耗时", report.item_seconds),
+          ("Drive 文件夹列目录", report.folder_list_seconds),
+          ("Chrome 下载", report.download_seconds)
+        ] %}
+        <tr>
+          <td>{{ label }}</td>
+          <td>{{ summary.count }}</td>
+          <td>{{ format_seconds(summary.avg) }}</td>
+          <td>{{ format_seconds(summary.median) }}</td>
+          <td>{{ format_seconds(summary.p95) }}</td>
+          <td>{{ format_seconds(summary.max) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="review-section">
+  <div class="section-heading">
+    <h2>最慢下载项</h2>
+    <p>默认显示最慢的 20 个下载项。</p>
+  </div>
+  <div class="table-wrap compact">
+    <table>
+      <thead>
+        <tr>
+          <th>下载项</th>
+          <th>SKU</th>
+          <th>类型</th>
+          <th>状态</th>
+          <th>总耗时</th>
+          <th>列目录</th>
+          <th>下载</th>
+          <th>文件</th>
+          <th>重试</th>
+          <th>错误</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in report.slowest_items %}
+        <tr>
+          <td>#{{ item.download_item_id }}</td>
+          <td class="sku-cell">{{ item.sku or "-" }}</td>
+          <td>{{ "Mockup" if item.source_type == "mockup" else "Design" }}</td>
+          <td><span class="status {{ item.status }}">{{ item.status }}</span></td>
+          <td>{{ format_seconds(item.total_seconds) }}</td>
+          <td>{{ format_seconds(item.folder_list_seconds) }}</td>
+          <td>{{ format_seconds(item.download_seconds) }}</td>
+          <td>{{ item.file_count }}</td>
+          <td>{{ item.retry_count }}</td>
+          <td>{{ item.error_code or "-" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

@@ -4,7 +4,15 @@ from pathlib import Path
 
 from app.core import database as db
 from app.core.excel_parser import OrderItemRow
+from app.core.security import hash_password, new_session_token, session_expiry_string
+from app.main import batch_speed_report
 from scripts.download_speed_report import build_speed_report, render_text_report
+
+
+class FakeRequest:
+    def __init__(self, token: str | None = None):
+        self.cookies = {}
+        self.headers = {"x-app-session": token} if token else {}
 
 
 def order_item(
@@ -78,6 +86,13 @@ def setup_report_batch(database_path: Path) -> tuple[Path, int, int]:
     return original_path, batch_id, int(item["id"])
 
 
+def setup_report_user(role: str = "admin") -> str:
+    user_id = db.create_user(f"{role}-user", hash_password("pw"), role=role)
+    token = new_session_token()
+    db.create_session(token, user_id, session_expiry_string())
+    return token
+
+
 def test_speed_report_summarizes_completed_download(tmp_path: Path) -> None:
     original_path, batch_id, item_id = setup_report_batch(tmp_path / "app.db")
     try:
@@ -145,5 +160,24 @@ def test_speed_report_tracks_retry_and_incomplete_items(tmp_path: Path) -> None:
         assert report["retry_wait_seconds"] == 3.0
         assert report["incomplete_item_count"] == 1
         assert report["slowest_items"][0]["complete"] is False
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_batch_speed_report_page_uses_batch_access_and_report(tmp_path: Path) -> None:
+    original_path, batch_id, item_id = setup_report_batch(tmp_path / "app.db")
+    try:
+        token = setup_report_user("admin")
+        add_event(batch_id, None, "queue_start", "2026-06-24 12:00:00")
+        add_event(batch_id, item_id, "task_start", "2026-06-24 12:00:01")
+        add_event(batch_id, item_id, "task_success", "2026-06-24 12:00:04")
+        add_event(batch_id, None, "queue_stop", "2026-06-24 12:00:05")
+
+        response = batch_speed_report(FakeRequest(token), batch_id)
+
+        assert response.template.name == "speed_report.html"
+        assert response.context["batch"]["id"] == batch_id
+        assert response.context["report"]["queue_seconds"] == 5.0
+        assert response.context["report"]["event_count"] == 4
     finally:
         db.DB_PATH = original_path
