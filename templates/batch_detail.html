@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}批次 #{{ batch.id }}{% endblock %}
+{% block title %}{{ batch.display_name }}{% endblock %}
 {% block content %}
-{% if batch.status in ["parsing", "downloading"] %}
+{% if batch.status in ["parsing", "processing"] %}
 <script>
   window.setTimeout(function () { window.location.reload(); }, 3000);
 </script>
@@ -11,23 +11,15 @@
 <span class="status {{ status or 'missing' }}">{{ status_labels.get(status or "pending", status or "等待") }}</span>
 {%- endmacro %}
 
-{% macro order_zip_button(row, extra_class="") -%}
-{% if row.order_archive_ready %}
-<a class="button tiny {{ extra_class }}" href="/batches/{{ batch.id }}/orders/{{ row.order.id }}/download.zip">订单 ZIP</a>
-{% else %}
-<span class="button tiny disabled {{ extra_class }}" aria-disabled="true">订单 ZIP</span>
-{% endif %}
-{%- endmacro %}
-
 {% macro item_actions(row, show_error=True) -%}
 {% set item = row.item %}
 <div class="inline-actions">
   {% if item.download_status == 'failed' %}
   <form method="post" action="/download-items/{{ item.download_item_id }}/retry">
-    <button class="button tiny" type="submit" {% if batch.status == "downloading" %}disabled{% endif %}>重试</button>
+    <button class="button tiny" type="submit" {% if not can_operate or batch.status == "processing" %}disabled{% endif %}>重试</button>
   </form>
   <form method="post" action="/download-items/{{ item.download_item_id }}/manual-done">
-    <button class="button tiny ghost" type="submit" {% if batch.status == "downloading" %}disabled{% endif %}>标记已处理</button>
+    <button class="button tiny ghost" type="submit" {% if not can_operate or batch.status == "processing" %}disabled{% endif %}>标记已处理</button>
   </form>
   {% elif item.download_status == 'downloaded' %}
   <span class="muted">已完成</span>
@@ -48,10 +40,10 @@
 <div class="inline-actions">
   {% if task.download_status == 'failed' %}
   <form method="post" action="/download-items/{{ task.download_item_id }}/retry">
-    <button class="button tiny" type="submit" {% if batch.status == "downloading" %}disabled{% endif %}>重试</button>
+    <button class="button tiny" type="submit" {% if not can_operate or batch.status == "processing" %}disabled{% endif %}>重试</button>
   </form>
   <form method="post" action="/download-items/{{ task.download_item_id }}/manual-done">
-    <button class="button tiny ghost" type="submit" {% if batch.status == "downloading" %}disabled{% endif %}>标记已处理</button>
+    <button class="button tiny ghost" type="submit" {% if not can_operate or batch.status == "processing" %}disabled{% endif %}>标记已处理</button>
   </form>
   {% elif task.download_status == 'downloaded' %}
   <span class="muted">已完成</span>
@@ -73,11 +65,27 @@
 
 <section class="page-header">
   <div>
-    <h1>批次 #{{ batch.id }}</h1>
-    <p>{{ batch.file_name }} · {{ status_badge(batch.status) }}</p>
+    <h1>{{ batch.display_name }}</h1>
+    <p>
+      {{ batch.file_name }} · {{ status_badge(batch.status) }}
+      {% if current_user.role == "developer" %}· 内部 #{{ batch.id }}{% endif %}
+    </p>
   </div>
   <div class="actions">
+    {% if can_operate and batch.status == "precheck_ready" %}
+    <form method="post" action="/batches/{{ batch.id }}/confirm">
+      <button class="button primary" type="submit">确认导入</button>
+    </form>
+    {% endif %}
+    {% if can_operate and batch.status in ["uploaded", "parsing", "precheck_ready", "precheck_failed", "confirmed"] %}
+    <form method="post" action="/batches/{{ batch.id }}/discard">
+      <button class="button subtle" type="submit">作废记录</button>
+    </form>
+    {% endif %}
     <a class="button subtle" href="/batches/{{ batch.id }}/speed-report">速度报告</a>
+    {% if current_user.role == "developer" %}
+    <a class="button subtle" href="/batches/{{ batch.id }}/source-file">下载原始表格</a>
+    {% endif %}
     {% if batch_archive_ready %}
     <a class="button subtle" href="/batches/{{ batch.id }}/download.zip">一键下载全部订单</a>
     {% else %}
@@ -93,7 +101,15 @@
     <p>{{ primary_action.body }}</p>
   </div>
   <div class="next-action-controls">
-    {% if primary_action.code == "action_required" %}
+    {% if not can_operate %}
+    <a class="button primary" href="#order-detail-section">{{ primary_action.cta }}</a>
+    {% elif primary_action.code == "needs_confirm" %}
+    <form method="post" action="/batches/{{ batch.id }}/confirm">
+      <button class="button primary" type="submit">{{ primary_action.cta }}</button>
+    </form>
+    {% elif primary_action.code == "discarded" %}
+    <a class="button primary" href="/">{{ primary_action.cta }}</a>
+    {% elif primary_action.code == "action_required" %}
     <a class="button primary" href="#failed-section">{{ primary_action.cta }}</a>
     {% elif primary_action.code == "running" %}
     <a class="button primary" href="#extension-panel">{{ primary_action.cta }}</a>
@@ -146,7 +162,7 @@
     <p>当前使用浏览器插件下载到本机，文件会保存到 Downloads/auto-download/batch-{{ batch.id }}/SKU/。</p>
   </div>
   <div class="extension-grid">
-    <div><span>#{{ batch.id }}</span><label>当前批次 ID</label></div>
+    <div><span>{{ batch.display_name }}</span><label>当前订单批次</label></div>
     <div><span>{{ status_counts.pending + status_counts.failed }}</span><label>待插件处理</label></div>
     <div><span>{{ status_counts.downloading }}</span><label>插件/服务器处理中</label></div>
   </div>
@@ -166,13 +182,17 @@
       type="button"
       data-base-url="{{ request.url.scheme }}://{{ request.url.netloc }}"
       data-batch-id="{{ batch.id }}"
-      data-can-start="{% if batch.status != 'needs_fix' and (status_counts.pending + status_counts.failed) > 0 %}true{% else %}false{% endif %}"
-      {% if batch.status == "downloading" or batch.status == "needs_fix" or (status_counts.pending + status_counts.failed) == 0 %}disabled{% endif %}
+      data-can-start="{% if can_operate and batch.status in ['confirmed', 'completed_with_errors'] and (status_counts.pending + status_counts.failed) > 0 %}true{% else %}false{% endif %}"
+      {% if not can_operate or batch.status not in ["confirmed", "completed_with_errors"] or (status_counts.pending + status_counts.failed) == 0 %}disabled{% endif %}
     >用插件下载待处理项</button>
     <span id="extension-start-status">
-      {% if batch.status == "needs_fix" %}
-        导入预检未通过，修正后才能启动插件。
-      {% elif batch.status == "downloading" %}
+      {% if not can_operate %}
+        这是团队只读批次，操作需由创建人或开发者执行。
+      {% elif batch.status == "precheck_ready" %}
+        请先确认导入正式订单批次，再启动插件。
+      {% elif batch.status in ["precheck_failed", "discarded", "uploaded", "parsing"] %}
+        当前批次尚未确认导入，不能启动插件。
+      {% elif batch.status == "processing" %}
         当前已有下载处理中，请等待完成后刷新页面。
       {% elif (status_counts.pending + status_counts.failed) == 0 %}
         当前没有待插件处理的下载项。
@@ -186,7 +206,7 @@
       class="button danger"
       id="extension-stop"
       type="button"
-      {% if batch.status != "downloading" and status_counts.downloading == 0 %}disabled{% endif %}
+      {% if not can_operate or (batch.status != "processing" and status_counts.downloading == 0) %}disabled{% endif %}
     >停止插件下载</button>
     <button class="button subtle" id="extension-refresh" type="button">刷新状态</button>
     <span id="extension-stop-status">停止后，当前项会标记失败；请在本页重试失败项。</span>
@@ -198,19 +218,19 @@
   {% endif %}
 </section>
 
-{% if current_user.role == "admin" %}
+{% if current_user.role == "developer" and can_operate %}
 <details class="fallback-panel">
   <summary>管理员应急：服务器备用下载</summary>
   <p>仅在插件不可用或需要应急处理时使用。服务器下载更容易遇到 Google Drive 限流，普通操作员默认不使用。</p>
   <div class="fallback-actions">
     <form method="post" action="/batches/{{ batch.id }}/start-download">
-      <button class="button subtle" type="submit" name="limit" value="10" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>服务器下载 10 项</button>
-      <button class="button subtle" type="submit" name="limit" value="20" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>服务器下载 20 项</button>
-      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.status == "downloading" or batch.status == "needs_fix" or handled_count >= batch.link_count %}disabled{% endif %}>服务器继续全部</button>
+      <button class="button subtle" type="submit" name="limit" value="10" {% if batch.status not in ["confirmed", "completed_with_errors"] or handled_count >= batch.link_count %}disabled{% endif %}>服务器下载 10 项</button>
+      <button class="button subtle" type="submit" name="limit" value="20" {% if batch.status not in ["confirmed", "completed_with_errors"] or handled_count >= batch.link_count %}disabled{% endif %}>服务器下载 20 项</button>
+      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.status not in ["confirmed", "completed_with_errors"] or handled_count >= batch.link_count %}disabled{% endif %}>服务器继续全部</button>
     </form>
     <form method="post" action="/batches/{{ batch.id }}/retry-failed">
-      <button class="button subtle" type="submit" name="limit" value="10" {% if batch.failed_count == 0 or batch.status == "downloading" %}disabled{% endif %}>服务器重试 10 个失败项</button>
-      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.failed_count == 0 or batch.status == "downloading" %}disabled{% endif %}>服务器重试全部失败项</button>
+      <button class="button subtle" type="submit" name="limit" value="10" {% if batch.failed_count == 0 or batch.status not in ["confirmed", "completed_with_errors"] %}disabled{% endif %}>服务器重试 10 个失败项</button>
+      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.failed_count == 0 or batch.status not in ["confirmed", "completed_with_errors"] %}disabled{% endif %}>服务器重试全部失败项</button>
     </form>
   </div>
 </details>
@@ -488,18 +508,61 @@
   }());
 </script>
 
-{% if batch.status == "review_ready" %}
+{% if batch.status == "precheck_ready" %}
 <section class="notice">
-  已解析完成。确认 SKU 和下载链接无误后，可以点击“开始/继续下载”。
+  预检完成。确认 SKU 和下载链接无误后，请先“确认导入”，再开始下载。
 </section>
-{% elif batch.status == "needs_fix" %}
+{% elif batch.status == "confirmed" %}
+<section class="notice">
+  已确认导入正式订单批次，可以开始下载。
+</section>
+{% elif batch.status == "precheck_failed" %}
 <section class="notice error-block">
   导入预检未通过。请补齐 SKU 和 Design Link 后重新上传。
+</section>
+{% elif batch.status == "discarded" %}
+<section class="notice">
+  该上传记录已作废，仅保留用于追溯，不进入正式订单批次和下载队列。
 </section>
 {% endif %}
 
 {% if batch.error_message %}
 <section class="notice error-block">{{ batch.error_message }}</section>
+{% endif %}
+
+{% if current_user.role == "developer" %}
+<details class="fallback-panel danger-zone">
+  <summary>开发者危险操作</summary>
+  <p>物理删除会移除批次、订单、下载项、插件诊断记录和本地文件；删除前会写入审计记录。</p>
+  <form class="danger-form" method="post" action="/batches/{{ batch.id }}/delete">
+    <label for="delete-confirmation">确认文本</label>
+    <input
+      id="delete-confirmation"
+      name="confirmation"
+      type="text"
+      placeholder="DELETE-BATCH-{{ batch.id }}"
+      autocomplete="off"
+      {% if batch.status == "processing" or status_counts.downloading > 0 %}disabled{% endif %}
+      required
+    >
+    <label for="delete-reason">删除原因</label>
+    <input
+      id="delete-reason"
+      name="reason"
+      type="text"
+      placeholder="例如：清理本机测试批次"
+      {% if batch.status == "processing" or status_counts.downloading > 0 %}disabled{% endif %}
+    >
+    <button
+      class="button danger"
+      type="submit"
+      {% if batch.status == "processing" or status_counts.downloading > 0 %}disabled{% endif %}
+    >物理删除批次</button>
+    {% if batch.status == "processing" or status_counts.downloading > 0 %}
+    <span class="muted">批次下载中，不能删除。</span>
+    {% endif %}
+  </form>
+</details>
 {% endif %}
 
 {% if import_summary %}
@@ -626,7 +689,6 @@
           <th>Mockup Link</th>
           <th>状态</th>
           <th>图片</th>
-          <th>下载</th>
           <th>处理</th>
         </tr>
       </thead>
@@ -665,7 +727,6 @@
           </td>
           <td>{{ status_badge(item.download_status) }}</td>
           <td>{{ item.download_image_count or 0 }}</td>
-          <td>{{ order_zip_button(row) }}</td>
           <td class="action-cell">
             {% for task in item.download_items %}
             <div class="task-action-row">

@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}速度报告 #{{ batch.id }}{% endblock %}
+{% block title %}速度报告 {{ batch.display_name }}{% endblock %}
 {% block content %}
 <section class="page-header">
   <div>
-    <h1>速度报告 #{{ batch.id }}</h1>
-    <p>{{ batch.file_name }} · 基于插件诊断事件统计</p>
+    <h1>速度报告 {{ batch.display_name }}</h1>
+    <p>{{ batch.file_name }} · 基于插件诊断事件统计{% if current_user.role == "developer" %} · 内部 #{{ batch.id }}{% endif %}</p>
   </div>
   <div class="actions">
     <a class="button subtle" href="/batches/{{ batch.id }}">返回批次</a>

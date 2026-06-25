@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}资料下载{% endblock %}
+{% block content %}
+{% macro resource_table(rows, empty_text) -%}
+{% if rows %}
+<div class="table-wrap compact">
+  <table class="resource-table">
+    <thead>
+      <tr>
+        <th>名称</th>
+        <th>文件</th>
+        <th>大小</th>
+        <th>版本说明</th>
+        <th>上传人</th>
+        <th>状态</th>
+        <th>上传时间</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for resource in rows %}
+      <tr>
+        <td class="sku-cell">{{ resource.title }}</td>
+        <td>{{ resource.original_file_name }}</td>
+        <td>{{ format_file_size(resource.file_size) }}</td>
+        <td>{{ resource.version_note or "-" }}</td>
+        <td>{{ resource.uploaded_by_username or "-" }}</td>
+        <td>
+          <span class="status {{ resource.status }}">{{ "可下载" if resource.status == "active" else "已停用" }}</span>
+        </td>
+        <td>{{ resource.created_at }}</td>
+        <td>
+          <div class="inline-actions">
+            <a class="button tiny" href="/resources/{{ resource.id }}/download">下载</a>
+            {% if current_user.role == "developer" %}
+              {% if resource.status == "active" %}
+              <form method="post" action="/resources/{{ resource.id }}/status">
+                <input type="hidden" name="status" value="disabled">
+                <button class="button tiny ghost" type="submit">停用</button>
+              </form>
+              {% else %}
+              <form method="post" action="/resources/{{ resource.id }}/status">
+                <input type="hidden" name="status" value="active">
+                <button class="button tiny" type="submit">启用</button>
+              </form>
+              {% endif %}
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="muted">{{ empty_text }}</p>
+{% endif %}
+{%- endmacro %}
+
+<section class="page-header">
+  <div>
+    <h1>资料下载</h1>
+    <p>下载表头模板、浏览器插件压缩包和使用说明。只有开发者可以上传或停用资料。</p>
+  </div>
+</section>
+
+{% if current_user.role == "developer" %}
+<section class="review-section">
+  <div class="section-heading">
+    <h2>上传资料</h2>
+    <p>表头模板仅允许 .xlsx，插件仅允许 .zip。</p>
+  </div>
+  <form class="resource-form" method="post" action="/resources" enctype="multipart/form-data">
+    <label for="title">名称</label>
+    <input id="title" name="title" type="text" placeholder="例如：订单导入表头模板">
+    <label for="category">分类</label>
+    <select id="category" name="category" required>
+      {% for category, label in resource_category_labels.items() %}
+      <option value="{{ category }}">{{ label }}</option>
+      {% endfor %}
+    </select>
+    <label for="version_note">版本说明</label>
+    <textarea id="version_note" name="version_note" rows="3" placeholder="可选，例如：适用于 2026-06 后的新表头"></textarea>
+    <label for="file">文件</label>
+    <input id="file" name="file" type="file" required>
+    <button class="button primary" type="submit">上传资料</button>
+  </form>
+</section>
+{% endif %}
+
+{% for category, label in resource_category_labels.items() %}
+<section class="review-section">
+  <div class="section-heading">
+    <h2>{{ label }}</h2>
+    <p>{{ resource_groups.get(category, [])|length }} 个文件</p>
+  </div>
+  {{ resource_table(resource_groups.get(category, []), "暂无可下载文件，请联系开发者上传。") }}
+</section>
+{% endfor %}
+{% endblock %}

@@ -74,6 +74,8 @@ def setup_extension_batch(database_path: Path):
     other_batch_id = db.create_batch("other.xlsx", Path("source.xlsx"), other_id)
     db.insert_import_items(batch_id, [order_item()])
     db.insert_import_items(other_batch_id, [order_item(sku="SKU-B")])
+    db.update_batch_status(batch_id, "confirmed")
+    db.update_batch_status(other_batch_id, "confirmed")
     return original_path, token, batch_id, other_batch_id
 
 
@@ -185,10 +187,25 @@ def test_extension_next_download_item_dispatches_one_item(tmp_path: Path) -> Non
         first_db = db.get_download_item(first_id)
         assert first_db["status"] == "downloading"
         assert first_db["attempt_count"] == 1
+        extension_download_item_success(request, first_id, {"image_count": 1})
 
         second = extension_next_download_item(request, batch_id)
         assert second["item"]["source_type"] == "mockup"
         assert second["item"]["download_item_id"] != first_id
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_extension_next_download_item_rejects_unconfirmed_batch(tmp_path: Path) -> None:
+    original_path, token, batch_id, _ = setup_extension_batch(tmp_path / "app.db")
+    try:
+        db.update_batch_status(batch_id, "precheck_ready")
+
+        with pytest.raises(Exception) as exc:
+            extension_next_download_item(FakeRequest(token), batch_id)
+
+        assert getattr(exc.value, "status_code") == 400
+        assert "尚未确认导入" in exc.value.detail
     finally:
         db.DB_PATH = original_path
 

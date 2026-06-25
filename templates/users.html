@@ -4,7 +4,7 @@
 <section class="page-header">
   <div>
     <h1>用户管理</h1>
-    <p>管理员可以创建业务员账号、启停账号和重置密码。</p>
+    <p>开发者可以创建账号、启停账号、重置密码，并查看每个账号的正式下载统计。</p>
   </div>
 </section>
 
@@ -25,6 +25,7 @@
     <select id="role" name="role">
       <option value="operator">业务员</option>
       <option value="admin">管理员</option>
+      <option value="developer">开发者</option>
     </select>
     <button class="button primary" type="submit">创建</button>
   </form>
@@ -42,6 +43,10 @@
           <th>用户名</th>
           <th>角色</th>
           <th>状态</th>
+          <th>正式批次</th>
+          <th>订单</th>
+          <th>下载项</th>
+          <th>成功</th>
           <th>创建时间</th>
           <th>重置密码</th>
           <th>启停</th>
@@ -49,10 +54,15 @@
       </thead>
       <tbody>
         {% for user in users %}
+        {% set usage = usage_by_user.get(user.id) %}
         <tr>
           <td class="sku-cell">{{ user.username }}</td>
-          <td>{{ "管理员" if user.role == "admin" else "业务员" }}</td>
+          <td>{{ role_labels.get(user.role, user.role) }}</td>
           <td><span class="status {{ user.status }}">{{ "启用" if user.status == "active" else "停用" }}</span></td>
+          <td>{{ usage.formal_batch_count if usage else 0 }}</td>
+          <td>{{ usage.order_count if usage else 0 }}</td>
+          <td>{{ usage.download_item_count if usage else 0 }}</td>
+          <td>{{ usage.downloaded_count if usage else 0 }}</td>
           <td>{{ user.created_at }}</td>
           <td>
             <form class="inline-form" method="post" action="/users/{{ user.id }}/password">

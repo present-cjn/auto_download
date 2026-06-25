@@ -169,7 +169,45 @@ def test_parse_batch_creates_empty_batch_order_dir(tmp_path: Path, monkeypatch) 
         parse_batch(batch_id, Path("source.xlsx"), sheet_name=None)
 
         assert (orders_dir / str(batch_id)).is_dir()
-        assert db.get_batch(batch_id)["status"] == "review_ready"
+        assert db.get_batch(batch_id)["status"] == "precheck_ready"
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_confirm_and_discard_batch_status_flow(tmp_path: Path) -> None:
+    database_path = tmp_path / "app.db"
+    original_path = db.DB_PATH
+    db.DB_PATH = database_path
+    try:
+        db.init_db(database_path)
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"))
+
+        assert db.get_batch(batch_id)["status"] == "uploaded"
+        assert db.confirm_batch(batch_id) is False
+
+        db.update_batch_status(batch_id, "precheck_ready")
+        assert db.confirm_batch(batch_id) is True
+        assert db.get_batch(batch_id)["status"] == "confirmed"
+
+        assert db.discard_batch(batch_id) is True
+        assert db.get_batch(batch_id)["status"] == "discarded"
+        assert db.discard_batch(batch_id) is False
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_init_db_normalizes_legacy_batch_statuses(tmp_path: Path) -> None:
+    database_path = tmp_path / "app.db"
+    original_path = db.DB_PATH
+    db.DB_PATH = database_path
+    try:
+        db.init_db(database_path)
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"))
+        db.update_batch_status(batch_id, "review_ready")
+
+        db.init_db(database_path)
+
+        assert db.get_batch(batch_id)["status"] == "confirmed"
     finally:
         db.DB_PATH = original_path
 
@@ -244,6 +282,7 @@ def test_download_timeout_does_not_stop_following_items(tmp_path: Path, monkeypa
                 ),
             ],
         )
+        db.update_batch_status(batch_id, "confirmed")
 
         process_download_items(batch_id)
 
@@ -302,6 +341,7 @@ def test_rate_limited_download_retries_and_succeeds(tmp_path: Path, monkeypatch)
         db.init_db(database_path)
         batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"))
         db.insert_import_items(batch_id, [order_item()])
+        db.update_batch_status(batch_id, "confirmed")
 
         process_download_items(batch_id)
 
@@ -353,6 +393,7 @@ def test_download_items_limit_processes_only_selected_count(tmp_path: Path, monk
                 order_item(order_no="ORD-3", row_number=4, sku="SKU-3", design_link="https://drive.google.com/drive/folders/3"),
             ],
         )
+        db.update_batch_status(batch_id, "confirmed")
 
         process_download_items(batch_id, limit=2)
 
@@ -363,9 +404,9 @@ def test_download_items_limit_processes_only_selected_count(tmp_path: Path, monk
             "https://drive.google.com/drive/folders/2",
         ]
         assert batch is not None
-        assert batch["status"] == "review_ready"
         assert status_counts["downloaded"] == 2
         assert status_counts["pending"] == 1
+        assert batch["status"] == "confirmed"
     finally:
         db.DB_PATH = original_path
 
@@ -399,6 +440,7 @@ def test_consecutive_rate_limits_pause_batch(tmp_path: Path, monkeypatch) -> Non
                 order_item(order_no="ORD-3", row_number=4, sku="SKU-3", design_link="https://drive.google.com/drive/folders/3"),
             ],
         )
+        db.update_batch_status(batch_id, "confirmed")
 
         process_download_items(batch_id)
 

@@ -10,6 +10,29 @@ from app.core.excel_parser import OrderItemRow
 
 DB_PATH = Path("data/app.db")
 
+LEGACY_BATCH_STATUS_MAP = {
+    "pending": "uploaded",
+    "review_ready": "confirmed",
+    "needs_fix": "precheck_failed",
+    "downloading": "processing",
+    "failed": "precheck_failed",
+}
+
+DISCARDABLE_BATCH_STATUSES = {
+    "uploaded",
+    "parsing",
+    "precheck_ready",
+    "precheck_failed",
+    "confirmed",
+}
+
+FORMAL_BATCH_STATUSES = {
+    "confirmed",
+    "processing",
+    "completed",
+    "completed_with_errors",
+}
+
 
 DOWNLOAD_ITEMS_SCHEMA = """
 CREATE TABLE download_items (
@@ -63,12 +86,50 @@ CREATE TABLE IF NOT EXISTS extension_events (
 );
 """
 
+BATCH_DELETION_AUDIT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS batch_deletion_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL,
+    file_name TEXT NOT NULL,
+    source_path TEXT,
+    status TEXT NOT NULL,
+    created_by_user_id INTEGER,
+    created_by_username TEXT,
+    order_count INTEGER NOT NULL DEFAULT 0,
+    item_count INTEGER NOT NULL DEFAULT 0,
+    link_count INTEGER NOT NULL DEFAULT 0,
+    success_count INTEGER NOT NULL DEFAULT 0,
+    failed_count INTEGER NOT NULL DEFAULT 0,
+    skipped_count INTEGER NOT NULL DEFAULT 0,
+    archive_path TEXT,
+    deleted_by_user_id INTEGER NOT NULL REFERENCES users(id),
+    delete_reason TEXT,
+    deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+RESOURCE_FILES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS resource_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    category TEXT NOT NULL CHECK(category IN ('header_template', 'browser_extension', 'guide')),
+    original_file_name TEXT NOT NULL,
+    storage_path TEXT NOT NULL DEFAULT '',
+    file_size INTEGER NOT NULL DEFAULT 0,
+    version_note TEXT,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'disabled')),
+    uploaded_by_user_id INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 USERS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('admin', 'operator')),
+    role TEXT NOT NULL CHECK(role IN ('developer', 'admin', 'operator')),
     status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'disabled')),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -108,6 +169,18 @@ def ensure_column(
     if column_name in table_columns(conn, table_name):
         return
     conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_definition}")
+
+
+def table_sql(conn: sqlite3.Connection, table_name: str) -> str:
+    row = conn.execute(
+        """
+        SELECT sql
+        FROM sqlite_master
+        WHERE type = 'table' AND name = ?
+        """,
+        (table_name,),
+    ).fetchone()
+    return str(row["sql"] or "") if row else ""
 
 
 def migrate_download_items_schema(conn: sqlite3.Connection) -> None:
@@ -183,8 +256,46 @@ def migrate_download_items_schema(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys = ON")
 
 
+def migrate_users_schema(conn: sqlite3.Connection) -> None:
+    existing_columns = table_columns(conn, "users")
+    if not existing_columns or "developer" in table_sql(conn, "users"):
+        return
+
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("PRAGMA legacy_alter_table = ON")
+    try:
+        conn.execute("ALTER TABLE users RENAME TO users_legacy")
+        conn.executescript(USERS_SCHEMA)
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO users (
+                id, username, password_hash, role, status, created_at, updated_at
+            )
+            SELECT
+                id, username, password_hash, role, status, created_at, updated_at
+            FROM users_legacy
+            """
+        )
+        conn.execute("DROP TABLE users_legacy")
+    finally:
+        conn.execute("PRAGMA legacy_alter_table = OFF")
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
 def ensure_schema_columns(conn: sqlite3.Connection) -> None:
     if table_columns(conn, "import_batches"):
+        ensure_column(
+            conn,
+            "import_batches",
+            "business_date",
+            "business_date TEXT",
+        )
+        ensure_column(
+            conn,
+            "import_batches",
+            "user_daily_sequence",
+            "user_daily_sequence INTEGER",
+        )
         ensure_column(
             conn,
             "import_batches",
@@ -212,6 +323,60 @@ def ensure_schema_columns(conn: sqlite3.Connection) -> None:
     if table_columns(conn, "order_items"):
         ensure_column(conn, "order_items", "mockup_link", "mockup_link TEXT")
         ensure_column(conn, "order_items", "carrier", "carrier TEXT")
+
+
+def batch_business_date_from_created_at(created_at: Optional[str]) -> str:
+    value = (created_at or "").strip()
+    if len(value) >= 10:
+        return value[:10].replace("-", "")
+    return "unknown"
+
+
+def assign_missing_batch_business_ids(conn: sqlite3.Connection) -> None:
+    if not table_columns(conn, "import_batches"):
+        return
+    rows = conn.execute(
+        """
+        SELECT id, created_by_user_id, created_at, business_date, user_daily_sequence
+        FROM import_batches
+        ORDER BY COALESCE(created_by_user_id, -1), created_at, id
+        """
+    ).fetchall()
+    next_sequence_by_key: dict[tuple[int, str], int] = {}
+    for row in rows:
+        batch_id = int(row["id"])
+        user_key = int(row["created_by_user_id"] or -1)
+        business_date = row["business_date"] or batch_business_date_from_created_at(
+            row["created_at"]
+        )
+        key = (user_key, business_date)
+        current_sequence = row["user_daily_sequence"]
+        if current_sequence:
+            next_sequence_by_key[key] = max(
+                next_sequence_by_key.get(key, 1),
+                int(current_sequence) + 1,
+            )
+            if not row["business_date"]:
+                conn.execute(
+                    """
+                    UPDATE import_batches
+                    SET business_date = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (business_date, batch_id),
+                )
+            continue
+        next_sequence = next_sequence_by_key.get(key, 1)
+        conn.execute(
+            """
+            UPDATE import_batches
+            SET business_date = ?, user_daily_sequence = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (business_date, next_sequence, batch_id),
+        )
+        next_sequence_by_key[key] = next_sequence + 1
 
 
 def backfill_missing_download_items(conn: sqlite3.Connection) -> None:
@@ -310,6 +475,7 @@ def refresh_batch_counts_with_conn(conn: sqlite3.Connection, batch_id: int) -> N
 
 
 def reconcile_interrupted_batches(conn: sqlite3.Connection) -> None:
+    normalize_legacy_batch_statuses(conn)
     interrupted_rows = conn.execute(
         """
         SELECT DISTINCT batch_id
@@ -337,7 +503,7 @@ def reconcile_interrupted_batches(conn: sqlite3.Connection) -> None:
         """
         SELECT id, status, success_count, failed_count
         FROM import_batches
-        WHERE status IN ('downloading', 'parsing', 'pending')
+        WHERE status IN ('processing', 'parsing', 'uploaded')
         """
     ).fetchall()
     for row in rows:
@@ -345,7 +511,7 @@ def reconcile_interrupted_batches(conn: sqlite3.Connection) -> None:
         item_count = conn.execute(
             "SELECT COUNT(*) FROM order_items WHERE batch_id = ?", (batch_id,)
         ).fetchone()[0]
-        if row["status"] == "pending" and item_count == 0:
+        if row["status"] == "uploaded" and item_count == 0:
             continue
         current_counts = conn.execute(
             """
@@ -356,13 +522,13 @@ def reconcile_interrupted_batches(conn: sqlite3.Connection) -> None:
             (batch_id,),
         ).fetchone()
         if item_count == 0:
-            next_status = "pending"
+            next_status = "uploaded"
         elif int(current_counts["failed_count"]) > 0:
             next_status = "completed_with_errors"
         elif int(current_counts["success_count"]) > 0:
             next_status = "completed"
         else:
-            next_status = "review_ready"
+            next_status = "precheck_ready" if row["status"] == "parsing" else "confirmed"
         conn.execute(
             """
             UPDATE import_batches
@@ -370,6 +536,20 @@ def reconcile_interrupted_batches(conn: sqlite3.Connection) -> None:
             WHERE id = ?
             """,
             (next_status, batch_id),
+        )
+
+
+def normalize_legacy_batch_statuses(conn: sqlite3.Connection) -> None:
+    if not table_columns(conn, "import_batches"):
+        return
+    for old_status, new_status in LEGACY_BATCH_STATUS_MAP.items():
+        conn.execute(
+            """
+            UPDATE import_batches
+            SET status = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE status = ?
+            """,
+            (new_status, old_status),
         )
 
 
@@ -410,16 +590,19 @@ def recover_stale_downloading_items(batch_id: int, stale_minutes: int = 30) -> i
 def init_db(db_path: Optional[Path] = None) -> None:
     with connect(db_path) as conn:
         migrate_download_items_schema(conn)
+        migrate_users_schema(conn)
         conn.executescript(USERS_SCHEMA)
+        conn.executescript(RESOURCE_FILES_SCHEMA)
         conn.executescript(SESSIONS_SCHEMA)
         conn.executescript(EXTENSION_EVENTS_SCHEMA)
+        conn.executescript(BATCH_DELETION_AUDIT_SCHEMA)
         conn.executescript(
             f"""
             CREATE TABLE IF NOT EXISTS import_batches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_name TEXT NOT NULL,
                 source_path TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
+                status TEXT NOT NULL DEFAULT 'uploaded',
                 order_count INTEGER NOT NULL DEFAULT 0,
                 item_count INTEGER NOT NULL DEFAULT 0,
                 link_count INTEGER NOT NULL DEFAULT 0,
@@ -430,6 +613,8 @@ def init_db(db_path: Optional[Path] = None) -> None:
                 error_message TEXT,
                 import_summary_json TEXT,
                 created_by_user_id INTEGER REFERENCES users(id),
+                business_date TEXT,
+                user_daily_sequence INTEGER,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
@@ -511,6 +696,7 @@ def init_db(db_path: Optional[Path] = None) -> None:
             """
         )
         ensure_schema_columns(conn)
+        assign_missing_batch_business_ids(conn)
         backfill_missing_download_items(conn)
         refresh_all_batch_counts(conn)
         reconcile_interrupted_batches(conn)
@@ -604,6 +790,115 @@ def update_user_password(user_id: int, password_hash: str) -> None:
         )
 
 
+def update_user_role(user_id: int, role: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE users
+            SET role = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (role, user_id),
+        )
+
+
+def create_resource_file(
+    title: str,
+    category: str,
+    original_file_name: str,
+    uploaded_by_user_id: int,
+    version_note: str = "",
+) -> int:
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO resource_files (
+                title, category, original_file_name, uploaded_by_user_id, version_note
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                title.strip(),
+                category,
+                original_file_name,
+                uploaded_by_user_id,
+                version_note.strip(),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+
+def update_resource_file_storage(
+    resource_id: int, storage_path: Path, file_size: int
+) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE resource_files
+            SET storage_path = ?, file_size = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (str(storage_path), file_size, resource_id),
+        )
+
+
+def list_resource_files(include_disabled: bool = False) -> list[dict[str, Any]]:
+    status_clause = "" if include_disabled else "WHERE rf.status = 'active'"
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                rf.*,
+                u.username AS uploaded_by_username
+            FROM resource_files rf
+            LEFT JOIN users u ON u.id = rf.uploaded_by_user_id
+            {status_clause}
+            ORDER BY
+                CASE rf.category
+                    WHEN 'header_template' THEN 1
+                    WHEN 'browser_extension' THEN 2
+                    ELSE 3
+                END,
+                rf.created_at DESC,
+                rf.id DESC
+            """
+        ).fetchall()
+        return [row_to_dict(row) for row in rows]
+
+
+def get_resource_file(
+    resource_id: int, include_disabled: bool = False
+) -> Optional[dict[str, Any]]:
+    status_clause = "" if include_disabled else "AND rf.status = 'active'"
+    with connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT
+                rf.*,
+                u.username AS uploaded_by_username
+            FROM resource_files rf
+            LEFT JOIN users u ON u.id = rf.uploaded_by_user_id
+            WHERE rf.id = ?
+              {status_clause}
+            """,
+            (resource_id,),
+        ).fetchone()
+        return row_to_dict(row) if row else None
+
+
+def update_resource_file_status(resource_id: int, status: str) -> bool:
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE resource_files
+            SET status = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (status, resource_id),
+        )
+        return cursor.rowcount > 0
+
+
 def create_session(session_token: str, user_id: int, expires_at: str) -> None:
     with connect() as conn:
         conn.execute(
@@ -655,16 +950,146 @@ def create_batch(
     file_name: str, source_path: Path, created_by_user_id: Optional[int] = None
 ) -> int:
     with connect() as conn:
+        business_date = conn.execute(
+            "SELECT strftime('%Y%m%d', 'now')"
+        ).fetchone()[0]
+        user_key = int(created_by_user_id) if created_by_user_id is not None else -1
+        next_sequence = int(
+            conn.execute(
+                """
+                SELECT COALESCE(MAX(user_daily_sequence), 0) + 1
+                FROM import_batches
+                WHERE COALESCE(created_by_user_id, -1) = ?
+                  AND business_date = ?
+                """,
+                (user_key, business_date),
+            ).fetchone()[0]
+        )
         cursor = conn.execute(
             """
             INSERT INTO import_batches (
-                file_name, source_path, status, created_by_user_id
+                file_name, source_path, status, created_by_user_id,
+                business_date, user_daily_sequence
             )
-            VALUES (?, ?, 'pending', ?)
+            VALUES (?, ?, 'uploaded', ?, ?, ?)
             """,
-            (file_name, str(source_path), created_by_user_id),
+            (
+                file_name,
+                str(source_path),
+                created_by_user_id,
+                business_date,
+                next_sequence,
+            ),
         )
         return int(cursor.lastrowid)
+
+
+def confirm_batch(batch_id: int) -> bool:
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE import_batches
+            SET status = 'confirmed', error_message = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND status = 'precheck_ready'
+            """,
+            (batch_id,),
+        )
+        return cursor.rowcount > 0
+
+
+def discard_batch(batch_id: int) -> bool:
+    placeholders = ",".join("?" for _ in DISCARDABLE_BATCH_STATUSES)
+    with connect() as conn:
+        cursor = conn.execute(
+            f"""
+            UPDATE import_batches
+            SET status = 'discarded', updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND status IN ({placeholders})
+            """,
+            [batch_id, *sorted(DISCARDABLE_BATCH_STATUSES)],
+        )
+        return cursor.rowcount > 0
+
+
+def batch_has_downloading_items(batch_id: int) -> bool:
+    with connect() as conn:
+        return (
+            int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM download_items
+                    WHERE batch_id = ? AND status = 'downloading'
+                    """,
+                    (batch_id,),
+                ).fetchone()[0]
+            )
+            > 0
+        )
+
+
+def delete_batch_with_audit(
+    batch_id: int, deleted_by_user_id: int, delete_reason: str
+) -> bool:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                ib.*,
+                u.username AS created_by_username
+            FROM import_batches ib
+            LEFT JOIN users u ON u.id = ib.created_by_user_id
+            WHERE ib.id = ?
+            """,
+            (batch_id,),
+        ).fetchone()
+        if not row:
+            return False
+        conn.execute(
+            """
+            INSERT INTO batch_deletion_audit (
+                batch_id, file_name, source_path, status, created_by_user_id,
+                created_by_username, order_count, item_count, link_count,
+                success_count, failed_count, skipped_count, archive_path,
+                deleted_by_user_id, delete_reason
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(row["id"]),
+                row["file_name"],
+                row["source_path"],
+                row["status"],
+                row["created_by_user_id"],
+                row["created_by_username"],
+                int(row["order_count"] or 0),
+                int(row["item_count"] or 0),
+                int(row["link_count"] or 0),
+                int(row["success_count"] or 0),
+                int(row["failed_count"] or 0),
+                int(row["skipped_count"] or 0),
+                row["archive_path"],
+                deleted_by_user_id,
+                delete_reason[:1000],
+            ),
+        )
+        conn.execute("DELETE FROM import_batches WHERE id = ?", (batch_id,))
+        return True
+
+
+def list_batch_deletion_audit() -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                bda.*,
+                u.username AS deleted_by_username
+            FROM batch_deletion_audit bda
+            LEFT JOIN users u ON u.id = bda.deleted_by_user_id
+            ORDER BY bda.id DESC
+            """
+        ).fetchall()
+        return [row_to_dict(row) for row in rows]
 
 
 def update_batch_source(batch_id: int, source_path: Path) -> None:
@@ -884,7 +1309,7 @@ def list_batches() -> list[dict[str, Any]]:
 
 
 def list_batches_for_user(user: dict[str, Any]) -> list[dict[str, Any]]:
-    if user["role"] == "admin":
+    if user["role"] in {"developer", "admin"}:
         return list_batches()
     with connect() as conn:
         rows = conn.execute(
@@ -900,6 +1325,82 @@ def list_batches_for_user(user: dict[str, Any]) -> list[dict[str, Any]]:
             (int(user["id"]),),
         ).fetchall()
         return [row_to_dict(row) for row in rows]
+
+
+def list_download_usage_by_user() -> list[dict[str, Any]]:
+    placeholders = ",".join("?" for _ in FORMAL_BATCH_STATUSES)
+    formal_statuses = sorted(FORMAL_BATCH_STATUSES)
+    with connect() as conn:
+        batch_rows = conn.execute(
+            f"""
+            SELECT
+                ib.created_by_user_id AS user_id,
+                COALESCE(u.username, '历史批次') AS username,
+                COALESCE(u.role, 'legacy') AS role,
+                COUNT(*) AS formal_batch_count,
+                COALESCE(SUM(ib.order_count), 0) AS order_count,
+                COALESCE(SUM(ib.item_count), 0) AS item_count,
+                COALESCE(SUM(ib.link_count), 0) AS download_item_count,
+                COALESCE(SUM(ib.success_count), 0) AS downloaded_count,
+                COALESCE(SUM(ib.failed_count), 0) AS failed_count
+            FROM import_batches ib
+            LEFT JOIN users u ON u.id = ib.created_by_user_id
+            WHERE ib.status IN ({placeholders})
+            GROUP BY ib.created_by_user_id, u.username, u.role
+            ORDER BY downloaded_count DESC, formal_batch_count DESC, username
+            """,
+            formal_statuses,
+        ).fetchall()
+        stats = {}
+        for row in batch_rows:
+            key = row["user_id"]
+            stats[key] = {
+                **row_to_dict(row),
+                "manual_done_count": 0,
+                "pending_count": 0,
+                "processing_count": 0,
+            }
+        download_rows = conn.execute(
+            f"""
+            SELECT
+                ib.created_by_user_id AS user_id,
+                di.status,
+                COUNT(*) AS count
+            FROM import_batches ib
+            JOIN download_items di ON di.batch_id = ib.id
+            WHERE ib.status IN ({placeholders})
+            GROUP BY ib.created_by_user_id, di.status
+            """,
+            formal_statuses,
+        ).fetchall()
+        for row in download_rows:
+            key = row["user_id"]
+            if key not in stats:
+                continue
+            status = row["status"]
+            count = int(row["count"])
+            if status == "manual_done":
+                stats[key]["manual_done_count"] = count
+            elif status == "pending":
+                stats[key]["pending_count"] = count
+            elif status == "downloading":
+                stats[key]["processing_count"] = count
+        return list(stats.values())
+
+
+def download_usage_totals(rows: list[dict[str, Any]]) -> dict[str, int]:
+    fields = [
+        "formal_batch_count",
+        "order_count",
+        "item_count",
+        "download_item_count",
+        "downloaded_count",
+        "failed_count",
+        "manual_done_count",
+        "pending_count",
+        "processing_count",
+    ]
+    return {field: sum(int(row.get(field) or 0) for row in rows) for field in fields}
 
 
 def get_batch(batch_id: int) -> Optional[dict[str, Any]]:

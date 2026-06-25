@@ -24,14 +24,13 @@ from app.core.security import (
 )
 from app.core.tasks import (
     ARCHIVES_DIR,
-    ORDERS_DIR,
-    create_order_archive,
     ensure_data_dirs,
     mark_download_item_manual_done,
     process_batch,
     retry_download_item,
     retry_failed,
     retry_failed_limited,
+    remove_batch_files,
     save_upload,
     start_download,
     start_download_limited,
@@ -45,16 +44,40 @@ templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 SESSION_COOKIE = "app_session"
+RESOURCES_DIR = Path("data/resources")
+VALID_ROLES = {"developer", "admin", "operator"}
+ROLE_LABELS = {
+    "developer": "开发者",
+    "admin": "管理员",
+    "operator": "业务员",
+    "legacy": "历史批次",
+}
+RESOURCE_CATEGORY_LABELS = {
+    "header_template": "表头模板",
+    "browser_extension": "浏览器插件",
+    "guide": "使用说明",
+}
+RESOURCE_ALLOWED_EXTENSIONS = {
+    "header_template": {".xlsx"},
+    "browser_extension": {".zip"},
+    "guide": {".pdf", ".docx", ".xlsx", ".zip"},
+}
 
 
 STATUS_LABELS = {
-    "pending": "等待",
+    "uploaded": "已上传",
     "parsing": "解析中",
+    "precheck_ready": "待确认",
+    "precheck_failed": "预检失败",
+    "confirmed": "已确认",
+    "processing": "下载中",
+    "discarded": "已作废",
+    "pending": "等待",
     "review_ready": "已解析",
     "needs_fix": "需修正",
     "downloading": "下载中",
-    "downloaded": "成功",
     "failed": "失败",
+    "downloaded": "成功",
     "completed": "已完成",
     "completed_with_errors": "有失败项",
     "skipped": "已跳过",
@@ -66,10 +89,16 @@ WORK_STATE_LABELS = {
     "action_required": "需要处理",
     "running": "下载中",
     "ready": "可开始",
+    "needs_confirm": "待确认",
+    "discarded": "已作废",
     "blocked": "需修正",
     "complete": "已完成",
     "waiting": "处理中",
 }
+
+
+DOWNLOAD_ALLOWED_BATCH_STATUSES = {"confirmed", "processing", "completed_with_errors"}
+DOWNLOAD_START_ALLOWED_BATCH_STATUSES = {"confirmed", "completed_with_errors"}
 
 
 def configured_extension_max_attempts() -> int:
@@ -99,18 +128,47 @@ EXTENSION_NON_RETRYABLE_ERROR_CODES = {
 }
 
 
-def initial_admin_credentials() -> Tuple[str, str]:
+def initial_developer_credentials() -> Tuple[str, str]:
     return (
-        os.getenv("ADMIN_USERNAME", "admin"),
-        os.getenv("ADMIN_PASSWORD", os.getenv("APP_PASSWORD", "change-me")),
+        os.getenv("DEVELOPER_USERNAME", os.getenv("ADMIN_USERNAME", "admin")),
+        os.getenv(
+            "DEVELOPER_PASSWORD",
+            os.getenv("ADMIN_PASSWORD", os.getenv("APP_PASSWORD", "change-me")),
+        ),
     )
 
 
-def ensure_initial_admin() -> None:
-    if db.user_count() > 0:
+def initial_seed_admin_credentials() -> list[Tuple[str, str]]:
+    default_password = os.getenv("ADMIN_PASSWORD", os.getenv("APP_PASSWORD", "change-me"))
+    return [
+        (
+            os.getenv("ADMIN1_USERNAME", "admin1"),
+            os.getenv("ADMIN1_PASSWORD", default_password),
+        ),
+        (
+            os.getenv("ADMIN2_USERNAME", "admin2"),
+            os.getenv("ADMIN2_PASSWORD", default_password),
+        ),
+    ]
+
+
+def create_user_if_missing(username: str, password: str, role: str) -> None:
+    username = username.strip()
+    if not username:
         return
-    username, password = initial_admin_credentials()
-    db.create_user(username, hash_password(password), role="admin")
+    existing_user = db.get_user_by_username(username)
+    if existing_user:
+        if role == "developer" and existing_user["role"] != "developer":
+            db.update_user_role(int(existing_user["id"]), "developer")
+        return
+    db.create_user(username, hash_password(password), role=role)
+
+
+def ensure_initial_accounts() -> None:
+    developer_username, developer_password = initial_developer_credentials()
+    create_user_if_missing(developer_username, developer_password, "developer")
+    for username, password in initial_seed_admin_credentials():
+        create_user_if_missing(username, password, "admin")
 
 
 def current_user(request: Request) -> Optional[dict]:
@@ -127,13 +185,19 @@ def require_user(request: Request) -> dict:
     return user
 
 
-def require_admin(user: dict) -> None:
-    if user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+def require_developer(user: dict) -> None:
+    if user["role"] != "developer":
+        raise HTTPException(status_code=403, detail="Developer access required")
 
 
 def can_access_batch(user: dict, batch: dict) -> bool:
-    if user["role"] == "admin":
+    if user["role"] in {"developer", "admin"}:
+        return True
+    return batch.get("created_by_user_id") == user["id"]
+
+
+def can_operate_batch(user: dict, batch: dict) -> bool:
+    if user["role"] == "developer":
         return True
     return batch.get("created_by_user_id") == user["id"]
 
@@ -147,27 +211,101 @@ def require_batch_access(batch_id: int, user: dict) -> dict:
     return batch
 
 
+def require_batch_operation(batch_id: int, user: dict) -> dict:
+    batch = require_batch_access(batch_id, user)
+    if not can_operate_batch(user, batch):
+        raise HTTPException(status_code=403, detail="Batch operation denied")
+    return batch
+
+
 def template_context(user: dict, **extra):
-    context = {"current_user": user}
+    context = {
+        "current_user": user,
+        "role_labels": ROLE_LABELS,
+        "resource_category_labels": RESOURCE_CATEGORY_LABELS,
+    }
     context.update(extra)
     return context
 
 
+def format_file_size(size: int) -> str:
+    size = max(0, int(size or 0))
+    if size >= 1024 * 1024:
+        return f"{size / (1024 * 1024):.1f} MB"
+    if size >= 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size} B"
+
+
+def grouped_resource_files(resources: list[dict]) -> dict[str, list[dict]]:
+    return {
+        category: [row for row in resources if row["category"] == category]
+        for category in RESOURCE_CATEGORY_LABELS
+    }
+
+
+def validate_resource_upload(category: str, filename: str) -> None:
+    if category not in RESOURCE_ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Invalid resource category")
+    suffix = Path(filename).suffix.lower()
+    if suffix not in RESOURCE_ALLOWED_EXTENSIONS[category]:
+        allowed = ", ".join(sorted(RESOURCE_ALLOWED_EXTENSIONS[category]))
+        raise HTTPException(status_code=400, detail=f"该分类只允许上传：{allowed}")
+
+
+def save_resource_file(resource_id: int, filename: str, content: bytes) -> Path:
+    resource_dir = RESOURCES_DIR / str(resource_id)
+    resource_dir.mkdir(parents=True, exist_ok=True)
+    target = resource_dir / safe_filename(filename)
+    target.write_bytes(content)
+    return target
+
+
+def batch_display_name(batch: dict) -> str:
+    business_date = batch.get("business_date")
+    sequence = batch.get("user_daily_sequence")
+    if business_date and sequence:
+        return f"订单-{business_date}-{int(sequence):03d}"
+    created_at = str(batch.get("created_at") or "")
+    fallback_date = created_at[:10].replace("-", "") if len(created_at) >= 10 else "unknown"
+    return f"订单-{fallback_date}-{int(batch['id']):03d}"
+
+
+def enrich_batch_identity(batch: dict) -> dict:
+    return {
+        **batch,
+        "display_name": batch_display_name(batch),
+        "owner_label": batch.get("created_by_username") or "历史批次",
+    }
+
+
 def batch_work_state(batch: dict, counts: dict[str, int]) -> dict[str, str]:
     pending_or_failed = int(counts["pending"]) + int(counts["failed"])
-    if batch["status"] == "needs_fix":
+    if batch["status"] == "discarded":
+        return {
+            "code": "discarded",
+            "label": WORK_STATE_LABELS["discarded"],
+            "next_action": "已作废，仅保留上传记录",
+        }
+    if batch["status"] == "precheck_ready":
+        return {
+            "code": "needs_confirm",
+            "label": WORK_STATE_LABELS["needs_confirm"],
+            "next_action": "人工确认后导入正式订单批次",
+        }
+    if batch["status"] in {"precheck_failed", "needs_fix"}:
         return {
             "code": "blocked",
             "label": WORK_STATE_LABELS["blocked"],
             "next_action": "修正表格后重新上传",
         }
-    if batch["status"] in {"parsing", "pending"}:
+    if batch["status"] in {"parsing", "uploaded", "pending"}:
         return {
             "code": "waiting",
             "label": WORK_STATE_LABELS["waiting"],
             "next_action": "等待解析完成",
         }
-    if int(counts["downloading"]) > 0 or batch["status"] == "downloading":
+    if int(counts["downloading"]) > 0 or batch["status"] in {"processing", "downloading"}:
         return {
             "code": "running",
             "label": WORK_STATE_LABELS["running"],
@@ -179,7 +317,7 @@ def batch_work_state(batch: dict, counts: dict[str, int]) -> dict[str, str]:
             "label": WORK_STATE_LABELS["action_required"],
             "next_action": "重试失败项或标记已处理",
         }
-    if pending_or_failed > 0 and batch["status"] == "review_ready":
+    if pending_or_failed > 0 and batch["status"] in {"confirmed", "review_ready"}:
         return {
             "code": "ready",
             "label": WORK_STATE_LABELS["ready"],
@@ -188,7 +326,7 @@ def batch_work_state(batch: dict, counts: dict[str, int]) -> dict[str, str]:
     return {
         "code": "complete",
         "label": WORK_STATE_LABELS["complete"],
-        "next_action": "下载订单 ZIP 或归档",
+        "next_action": "下载批次 ZIP 或归档",
     }
 
 
@@ -200,18 +338,20 @@ def enrich_batch_work_queue(batches: list[dict]) -> list[dict]:
         "blocked": 4,
         "waiting": 5,
         "complete": 6,
+        "discarded": 7,
     }
     enriched = []
     for batch in batches:
         counts = db.get_batch_status_counts(int(batch["id"]))
         work_state = batch_work_state(batch, counts)
         row = {
-            **batch,
+            **enrich_batch_identity(batch),
             "status_label": STATUS_LABELS.get(batch["status"], batch["status"]),
             "status_counts": counts,
             "work_state": work_state,
             "pending_or_failed_count": int(counts["pending"]) + int(counts["failed"]),
             "handled_count": int(counts["downloaded"]) + int(counts["manual_done"]),
+            "queue_group": batch_queue_group(batch),
         }
         enriched.append(row)
     return sorted(
@@ -221,6 +361,30 @@ def enrich_batch_work_queue(batches: list[dict]) -> list[dict]:
             -int(row["id"]),
         ),
     )
+
+
+def batch_queue_group(batch: dict) -> str:
+    status = batch["status"]
+    if status in {"uploaded", "parsing", "precheck_ready", "precheck_failed"}:
+        return "precheck"
+    if status == "discarded":
+        return "discarded"
+    return "formal"
+
+
+def group_batches_for_index(batches: list[dict]) -> dict[str, list[dict]]:
+    return {
+        "precheck": [batch for batch in batches if batch["queue_group"] == "precheck"],
+        "formal": [batch for batch in batches if batch["queue_group"] == "formal"],
+        "discarded": [batch for batch in batches if batch["queue_group"] == "discarded"],
+    }
+
+
+def usage_rows_for_user(user: dict) -> list[dict]:
+    rows = db.list_download_usage_by_user()
+    if user["role"] in {"developer", "admin"}:
+        return rows
+    return [row for row in rows if row.get("user_id") == user["id"]]
 
 
 def sort_rows_by_excel_row(rows: list[dict]) -> list[dict]:
@@ -303,13 +467,17 @@ def batch_download_actions(batch: dict, counts: dict[str, int]) -> dict[str, boo
     has_pending_work = int(counts["pending"]) + int(counts["failed"]) > 0
     has_downloading = int(counts["downloading"]) > 0
     can_start = (
-        batch["status"] != "needs_fix"
+        batch["status"] in DOWNLOAD_START_ALLOWED_BATCH_STATUSES
         and has_pending_work
         and not has_downloading
     )
     return {
         "can_start_extension": can_start,
-        "can_retry_failed": int(counts["failed"]) > 0 and not has_downloading,
+        "can_retry_failed": (
+            batch["status"] in DOWNLOAD_START_ALLOWED_BATCH_STATUSES
+            and int(counts["failed"]) > 0
+            and not has_downloading
+        ),
         "can_refresh": True,
     }
 
@@ -317,7 +485,15 @@ def batch_download_actions(batch: dict, counts: dict[str, int]) -> dict[str, boo
 def batch_primary_action(batch: dict, counts: dict[str, int]) -> dict[str, str]:
     work_state = batch_work_state(batch, counts)
     actions = batch_download_actions(batch, counts)
-    if work_state["code"] == "blocked":
+    if work_state["code"] == "needs_confirm":
+        title = "上传预检已完成"
+        body = "确认订单、SKU 和链接无误后，再导入为正式订单批次。确认前不会进入下载队列和正式统计。"
+        cta = "确认导入"
+    elif work_state["code"] == "discarded":
+        title = "上传记录已作废"
+        body = "该记录仅用于追溯上传错误，不会进入正式订单批次、下载队列或统计。"
+        cta = "返回批次列表"
+    elif work_state["code"] == "blocked":
         title = "导入预检未通过"
         body = "补齐 SKU 和 Design Link 后重新上传。"
         cta = "查看预检问题"
@@ -336,7 +512,7 @@ def batch_primary_action(batch: dict, counts: dict[str, int]) -> dict[str, str]:
     elif work_state["code"] == "complete":
         title = "批次已完成"
         body = "当前没有待处理下载项。可以下载 ZIP 或查看明细。"
-        cta = "下载订单 ZIP"
+        cta = "下载批次 ZIP"
     else:
         title = "批次处理中"
         body = "系统正在处理导入或状态恢复，请稍后刷新。"
@@ -351,13 +527,16 @@ def batch_primary_action(batch: dict, counts: dict[str, int]) -> dict[str, str]:
 
 def refresh_batch_status_after_extension_update(batch_id: int) -> None:
     db.refresh_batch_counts(batch_id)
+    batch = db.get_batch(batch_id)
+    if not batch or batch["status"] not in DOWNLOAD_ALLOWED_BATCH_STATUSES:
+        return
     counts = db.get_batch_status_counts(batch_id)
     if counts["downloading"] > 0:
-        db.update_batch_status(batch_id, "downloading")
+        db.update_batch_status(batch_id, "processing")
     elif counts["failed"] > 0:
         db.update_batch_status(batch_id, "completed_with_errors")
     elif counts["pending"] > 0:
-        db.update_batch_status(batch_id, "review_ready")
+        db.update_batch_status(batch_id, "confirmed")
     else:
         db.update_batch_status(batch_id, "completed")
 
@@ -473,11 +652,28 @@ def should_retry_extension_failure(item: dict, classified: dict[str, str | bool]
     return int(item.get("attempt_count") or 0) < extension_max_attempts()
 
 
+def require_download_allowed(batch: dict) -> None:
+    if batch["status"] not in DOWNLOAD_ALLOWED_BATCH_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail="该批次尚未确认导入，不能开始下载。",
+        )
+
+
+def require_download_start_allowed(batch: dict) -> None:
+    if batch["status"] not in DOWNLOAD_START_ALLOWED_BATCH_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail="该批次尚未确认导入，或当前已有下载处理中。",
+        )
+
+
 @app.on_event("startup")
 def startup() -> None:
     ensure_data_dirs()
+    RESOURCES_DIR.mkdir(parents=True, exist_ok=True)
     db.init_db()
-    ensure_initial_admin()
+    ensure_initial_accounts()
     db.delete_expired_sessions(utc_now_string())
 
 
@@ -532,10 +728,17 @@ def logout(request: Request):
 def index(request: Request):
     user = require_user(request)
     batches = enrich_batch_work_queue(db.list_batches_for_user(user))
+    usage_rows = usage_rows_for_user(user)
     return templates.TemplateResponse(
         request=request,
         name="index.html",
-        context=template_context(user, batches=batches),
+        context=template_context(
+            user,
+            batches=batches,
+            batch_groups=group_batches_for_index(batches),
+            usage_rows=usage_rows,
+            usage_totals=db.download_usage_totals(usage_rows),
+        ),
     )
 
 
@@ -564,22 +767,107 @@ async def upload_excel(request: Request, file: UploadFile = File(...)):
     return RedirectResponse(f"/batches/{batch_id}", status_code=303)
 
 
+@app.get("/resources")
+def resources_page(request: Request):
+    user = require_user(request)
+    include_disabled = user["role"] == "developer"
+    resources = db.list_resource_files(include_disabled=include_disabled)
+    return templates.TemplateResponse(
+        request=request,
+        name="resources.html",
+        context=template_context(
+            user,
+            resource_groups=grouped_resource_files(resources),
+            format_file_size=format_file_size,
+        ),
+    )
+
+
+@app.post("/resources")
+async def upload_resource(
+    request: Request,
+    title: str = Form(""),
+    category: str = Form(""),
+    version_note: str = Form(""),
+    file: UploadFile = File(...),
+):
+    user = require_user(request)
+    require_developer(user)
+    filename = file.filename or "resource"
+    validate_resource_upload(category, filename)
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="上传文件不能为空")
+    display_title = title.strip() or Path(filename).stem
+    resource_id = db.create_resource_file(
+        display_title,
+        category,
+        filename,
+        int(user["id"]),
+        version_note,
+    )
+    storage_path = save_resource_file(resource_id, filename, content)
+    db.update_resource_file_storage(resource_id, storage_path, len(content))
+    return RedirectResponse("/resources", status_code=303)
+
+
+@app.get("/resources/{resource_id}/download")
+def download_resource(request: Request, resource_id: int):
+    user = require_user(request)
+    include_disabled = user["role"] == "developer"
+    resource = db.get_resource_file(resource_id, include_disabled=include_disabled)
+    if not resource:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    storage_path = Path(resource["storage_path"] or "")
+    if not storage_path.exists() or not storage_path.is_file():
+        raise HTTPException(status_code=404, detail="Resource file is not ready")
+    return FileResponse(
+        storage_path,
+        media_type="application/octet-stream",
+        filename=resource["original_file_name"],
+    )
+
+
+@app.post("/resources/{resource_id}/status")
+def update_resource_status(
+    request: Request, resource_id: int, status: str = Form("")
+):
+    user = require_user(request)
+    require_developer(user)
+    if status not in {"active", "disabled"}:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    if not db.update_resource_file_status(resource_id, status):
+        raise HTTPException(status_code=404, detail="Resource not found")
+    return RedirectResponse("/resources", status_code=303)
+
+
 @app.get("/users")
 def users_page(request: Request):
     user = require_user(request)
-    require_admin(user)
+    require_developer(user)
+    usage_by_user = {
+        row.get("user_id"): row for row in db.list_download_usage_by_user()
+    }
     return templates.TemplateResponse(
         request=request,
         name="users.html",
-        context=template_context(user, users=db.list_users(), error=None),
+        context=template_context(
+            user,
+            users=db.list_users(),
+            usage_by_user=usage_by_user,
+            error=None,
+        ),
     )
 
 
 @app.post("/users")
 def create_user(request: Request, username: str = Form(""), password: str = Form(""), role: str = Form("operator")):
     user = require_user(request)
-    require_admin(user)
+    require_developer(user)
     username = username.strip()
+    usage_by_user = {
+        row.get("user_id"): row for row in db.list_download_usage_by_user()
+    }
     if not username or not password:
         return templates.TemplateResponse(
             request=request,
@@ -587,11 +875,12 @@ def create_user(request: Request, username: str = Form(""), password: str = Form
             context=template_context(
                 user,
                 users=db.list_users(),
+                usage_by_user=usage_by_user,
                 error="用户名和密码不能为空",
             ),
             status_code=400,
         )
-    if role not in {"admin", "operator"}:
+    if role not in VALID_ROLES:
         raise HTTPException(status_code=400, detail="Invalid role")
     try:
         db.create_user(username, hash_password(password), role=role)
@@ -602,6 +891,7 @@ def create_user(request: Request, username: str = Form(""), password: str = Form
             context=template_context(
                 user,
                 users=db.list_users(),
+                usage_by_user=usage_by_user,
                 error="用户名已存在",
             ),
             status_code=400,
@@ -612,7 +902,7 @@ def create_user(request: Request, username: str = Form(""), password: str = Form
 @app.post("/users/{user_id}/status")
 def update_user_status(request: Request, user_id: int, status: str = Form("")):
     user = require_user(request)
-    require_admin(user)
+    require_developer(user)
     if status not in {"active", "disabled"}:
         raise HTTPException(status_code=400, detail="Invalid status")
     if int(user["id"]) == user_id and status == "disabled":
@@ -626,7 +916,7 @@ def update_user_status(request: Request, user_id: int, status: str = Form("")):
 @app.post("/users/{user_id}/password")
 def reset_user_password(request: Request, user_id: int, password: str = Form("")):
     user = require_user(request)
-    require_admin(user)
+    require_developer(user)
     if not password:
         raise HTTPException(status_code=400, detail="Password is required")
     if not db.get_user(user_id):
@@ -638,22 +928,20 @@ def reset_user_password(request: Request, user_id: int, password: str = Form("")
 @app.get("/batches/{batch_id}")
 def batch_detail(request: Request, batch_id: int):
     user = require_user(request)
-    batch = require_batch_access(batch_id, user)
-    stale_recovered_count = recover_stale_extension_downloads(batch_id)
+    batch = enrich_batch_identity(require_batch_access(batch_id, user))
+    can_operate = can_operate_batch(user, batch)
+    stale_recovered_count = (
+        recover_stale_extension_downloads(batch_id) if can_operate else 0
+    )
     if stale_recovered_count:
-        batch = require_batch_access(batch_id, user)
+        batch = enrich_batch_identity(require_batch_access(batch_id, user))
+        can_operate = can_operate_batch(user, batch)
     orders = db.get_batch_orders(batch_id)
     enrich_order_download_durations(orders)
     display_rows = []
     failed_rows = []
     for group_index, order in enumerate(orders):
         item_count = len(order["items"])
-        order_archive_ready = False
-        for item in order["items"]:
-            sku_dir = ORDERS_DIR / str(batch_id) / str(item.get("sku") or "")
-            if sku_dir.exists() and any(path.is_file() for path in sku_dir.rglob("*")):
-                order_archive_ready = True
-                break
         for item_index, item in enumerate(order["items"]):
             row = {
                 "order": order,
@@ -662,7 +950,6 @@ def batch_detail(request: Request, batch_id: int):
                 "is_first_in_order": item_index == 0,
                 "order_item_count": item_count,
                 "order_group_index": group_index % 2,
-                "order_archive_ready": order_archive_ready,
             }
             display_rows.append(row)
             if item.get("download_status") == "failed":
@@ -675,6 +962,13 @@ def batch_detail(request: Request, batch_id: int):
     status_counts = db.get_batch_status_counts(batch_id)
     handled_count = int(batch["success_count"]) + int(status_counts["manual_done"])
     primary_action = batch_primary_action(batch, status_counts)
+    if not can_operate:
+        primary_action = {
+            **primary_action,
+            "title": "团队批次只读",
+            "body": "你可以查看订单、下载情况和统计；操作需由创建人或开发者执行。",
+            "cta": "查看订单明细",
+        }
     filter_counts = {
         "all": len(display_rows),
         "failed": sum(1 for row in display_rows if row["item"].get("download_status") == "failed"),
@@ -718,6 +1012,7 @@ def batch_detail(request: Request, batch_id: int):
             stale_recovered_count=stale_recovered_count,
             primary_action=primary_action,
             filter_counts=filter_counts,
+            can_operate=can_operate,
         ),
     )
 
@@ -725,7 +1020,7 @@ def batch_detail(request: Request, batch_id: int):
 @app.get("/batches/{batch_id}/speed-report")
 def batch_speed_report(request: Request, batch_id: int):
     user = require_user(request)
-    batch = require_batch_access(batch_id, user)
+    batch = enrich_batch_identity(require_batch_access(batch_id, user))
     report = build_speed_report(batch_id, db.DB_PATH, slow_limit=20)
     return templates.TemplateResponse(
         request=request,
@@ -743,27 +1038,75 @@ def batch_speed_report(request: Request, batch_id: int):
 def batch_status(request: Request, batch_id: int):
     user = require_user(request)
     batch = require_batch_access(batch_id, user)
-    stale_recovered_count = recover_stale_extension_downloads(batch_id)
+    can_operate = can_operate_batch(user, batch)
+    stale_recovered_count = (
+        recover_stale_extension_downloads(batch_id) if can_operate else 0
+    )
     if stale_recovered_count:
         batch = require_batch_access(batch_id, user)
+        can_operate = can_operate_batch(user, batch)
     orders = db.get_batch_orders(batch_id)
     enrich_order_download_durations(orders)
     counts = db.get_batch_status_counts(batch_id)
+    actions = batch_download_actions(batch, counts)
+    if not can_operate:
+        actions = {**actions, "can_start_extension": False, "can_retry_failed": False}
     return {
         "batch": batch,
         "status_counts": counts,
         "current_task": current_download_task_from_orders(orders),
         "stale_recovered_count": stale_recovered_count,
-        "actions": batch_download_actions(batch, counts),
+        "actions": actions,
     }
+
+
+@app.post("/batches/{batch_id}/confirm")
+def confirm_batch(request: Request, batch_id: int):
+    user = require_user(request)
+    require_batch_operation(batch_id, user)
+    if not db.confirm_batch(batch_id):
+        raise HTTPException(status_code=400, detail="只有预检完成、待确认的上传记录可以确认导入。")
+    return RedirectResponse(f"/batches/{batch_id}", status_code=303)
+
+
+@app.post("/batches/{batch_id}/discard")
+def discard_batch(request: Request, batch_id: int):
+    user = require_user(request)
+    require_batch_operation(batch_id, user)
+    if not db.discard_batch(batch_id):
+        raise HTTPException(status_code=400, detail="当前状态不能作废。下载中或已完成批次不能作废。")
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/batches/{batch_id}/delete")
+def delete_batch(
+    request: Request,
+    batch_id: int,
+    confirmation: str = Form(""),
+    reason: str = Form(""),
+):
+    user = require_user(request)
+    require_developer(user)
+    batch = require_batch_access(batch_id, user)
+    expected_confirmation = f"DELETE-BATCH-{batch_id}"
+    if confirmation.strip() != expected_confirmation:
+        raise HTTPException(status_code=400, detail="删除确认文本不正确。")
+    if batch["status"] == "processing" or db.batch_has_downloading_items(batch_id):
+        raise HTTPException(status_code=400, detail="批次正在下载中，不能删除。")
+    delete_reason = reason.strip() or "开发者删除批次"
+    if not db.delete_batch_with_audit(batch_id, int(user["id"]), delete_reason):
+        raise HTTPException(status_code=404, detail="Batch not found")
+    remove_batch_files(batch_id)
+    return RedirectResponse("/", status_code=303)
 
 
 @app.get("/api/extension/batches/{batch_id}/download-items")
 def extension_download_items(request: Request, batch_id: int, limit: int = 50):
     user = require_user(request)
-    batch = require_batch_access(batch_id, user)
+    batch = require_batch_operation(batch_id, user)
     if recover_stale_extension_downloads(batch_id):
-        batch = require_batch_access(batch_id, user)
+        batch = require_batch_operation(batch_id, user)
+    require_download_allowed(batch)
     items = db.get_extension_download_items(batch_id, limit)
     counts = db.get_batch_status_counts(batch_id)
     return {
@@ -780,11 +1123,10 @@ def extension_download_items(request: Request, batch_id: int, limit: int = 50):
 @app.post("/api/extension/batches/{batch_id}/next-download-item")
 def extension_next_download_item(request: Request, batch_id: int):
     user = require_user(request)
-    batch = require_batch_access(batch_id, user)
+    batch = require_batch_operation(batch_id, user)
     if recover_stale_extension_downloads(batch_id):
-        batch = require_batch_access(batch_id, user)
-    if batch["status"] == "needs_fix":
-        raise HTTPException(status_code=400, detail="导入预检未通过，请先修正表格后重新上传。")
+        batch = require_batch_operation(batch_id, user)
+    require_download_start_allowed(batch)
 
     item = db.get_next_extension_download_item(
         batch_id,
@@ -826,7 +1168,8 @@ def extension_start_download_item(request: Request, download_item_id: int):
     item = db.get_download_item(download_item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Download item not found")
-    require_batch_access(int(item["batch_id"]), user)
+    batch = require_batch_operation(int(item["batch_id"]), user)
+    require_download_start_allowed(batch)
     db.clear_downloaded_files(download_item_id)
     db.mark_download_started(download_item_id)
     refresh_batch_status_after_extension_update(int(item["batch_id"]))
@@ -839,7 +1182,8 @@ def extension_download_item_heartbeat(request: Request, download_item_id: int):
     item = db.get_download_item(download_item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Download item not found")
-    require_batch_access(int(item["batch_id"]), user)
+    batch = require_batch_operation(int(item["batch_id"]), user)
+    require_download_allowed(batch)
     updated = db.mark_download_heartbeat(download_item_id)
     return {
         "ok": True,
@@ -859,7 +1203,8 @@ def extension_download_item_success(
     item = db.get_download_item(download_item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Download item not found")
-    require_batch_access(int(item["batch_id"]), user)
+    batch = require_batch_operation(int(item["batch_id"]), user)
+    require_download_allowed(batch)
     data = request_json_dict(body)
     files = data.get("files") if isinstance(data.get("files"), list) else []
     image_count = data.get("image_count")
@@ -885,7 +1230,8 @@ def extension_download_item_failure(
     item = db.get_download_item(download_item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Download item not found")
-    require_batch_access(int(item["batch_id"]), user)
+    batch = require_batch_operation(int(item["batch_id"]), user)
+    require_download_allowed(batch)
     data = request_json_dict(body)
     files = data.get("files") if isinstance(data.get("files"), list) else []
     partial_image_count = data.get("partial_image_count")
@@ -950,7 +1296,7 @@ def extension_events(request: Request, body: Any = Body(default=None)):
     batch_id = int(data.get("batch_id") or 0)
     if batch_id <= 0:
         raise HTTPException(status_code=400, detail="batch_id is required")
-    require_batch_access(batch_id, user)
+    require_batch_operation(batch_id, user)
     download_item_id = data.get("download_item_id")
     try:
         download_item_id = int(download_item_id) if download_item_id else None
@@ -970,9 +1316,8 @@ def extension_events(request: Request, body: Any = Body(default=None)):
 @app.post("/batches/{batch_id}/start-download")
 def start_batch_download(request: Request, batch_id: int, limit: int = Form(0)):
     user = require_user(request)
-    batch = require_batch_access(batch_id, user)
-    if batch["status"] == "needs_fix":
-        raise HTTPException(status_code=400, detail="导入预检未通过，请先修正表格后重新上传。")
+    batch = require_batch_operation(batch_id, user)
+    require_download_start_allowed(batch)
     selected_limit = normalized_limit(limit)
     if selected_limit:
         start_background(start_download_limited, batch_id, selected_limit)
@@ -984,7 +1329,8 @@ def start_batch_download(request: Request, batch_id: int, limit: int = Form(0)):
 @app.post("/batches/{batch_id}/retry-failed")
 def retry_failed_items(request: Request, batch_id: int, limit: int = Form(0)):
     user = require_user(request)
-    require_batch_access(batch_id, user)
+    batch = require_batch_operation(batch_id, user)
+    require_download_start_allowed(batch)
     selected_limit = normalized_limit(limit)
     if selected_limit:
         start_background(retry_failed_limited, batch_id, selected_limit)
@@ -999,7 +1345,8 @@ def retry_one_download_item(request: Request, download_item_id: int):
     item = db.get_download_item(download_item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Download item not found")
-    require_batch_access(int(item["batch_id"]), user)
+    batch = require_batch_operation(int(item["batch_id"]), user)
+    require_download_start_allowed(batch)
     start_background(retry_download_item, download_item_id)
     return RedirectResponse(f"/batches/{item['batch_id']}", status_code=303)
 
@@ -1010,7 +1357,7 @@ def mark_one_download_item_manual_done(request: Request, download_item_id: int):
     item = db.get_download_item(download_item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Download item not found")
-    require_batch_access(int(item["batch_id"]), user)
+    require_batch_operation(int(item["batch_id"]), user)
     mark_download_item_manual_done(download_item_id)
     return RedirectResponse(f"/batches/{item['batch_id']}", status_code=303)
 
@@ -1029,19 +1376,17 @@ def download_archive(request: Request, batch_id: int):
     )
 
 
-@app.get("/batches/{batch_id}/orders/{order_id}/download.zip")
-def download_order_archive(request: Request, batch_id: int, order_id: int):
+@app.get("/batches/{batch_id}/source-file")
+def download_source_file(request: Request, batch_id: int):
     user = require_user(request)
-    require_batch_access(batch_id, user)
-    order = db.get_order(order_id)
-    if not order or int(order["batch_id"]) != batch_id:
-        raise HTTPException(status_code=404, detail="Order not found")
-    try:
-        archive_path = create_order_archive(batch_id, order_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    require_developer(user)
+    batch = require_batch_access(batch_id, user)
+    source_path = Path(batch["source_path"] or "")
+    if not source_path.exists() or not source_path.is_file():
+        raise HTTPException(status_code=404, detail="Source file is not ready")
+    filename = batch["file_name"] or f"batch-{batch_id}-source.xlsx"
     return FileResponse(
-        archive_path,
-        media_type="application/zip",
-        filename=f"batch-{batch_id}-{order['order_no']}.zip",
+        source_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=filename,
     )

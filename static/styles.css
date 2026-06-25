@@ -249,7 +249,10 @@ tr:last-child td {
 
 .status.downloading,
 .status.parsing,
+.status.processing,
 .status.review_ready,
+.status.precheck_ready,
+.status.confirmed,
 .status.needs_fix,
 .status.queued {
   background: #eaf1ff;
@@ -257,9 +260,16 @@ tr:last-child td {
 }
 
 .status.pending,
+.status.uploaded,
 .status.missing {
   background: #f3f5f8;
   color: var(--muted);
+}
+
+.status.precheck_failed,
+.status.discarded {
+  background: #fff4dc;
+  color: var(--warn);
 }
 
 .status.work-action_required {
@@ -277,6 +287,11 @@ tr:last-child td {
   color: var(--success);
 }
 
+.status.work-needs_confirm {
+  background: #eaf1ff;
+  color: var(--info);
+}
+
 .status.work-blocked {
   background: #fff4dc;
   color: var(--warn);
@@ -290,6 +305,11 @@ tr:last-child td {
 .status.work-waiting {
   background: #f3f5f8;
   color: var(--muted);
+}
+
+.status.work-discarded {
+  background: #fff4dc;
+  color: var(--warn);
 }
 
 .status.skipped {
@@ -347,13 +367,18 @@ label {
 input[type="file"],
 input[type="password"],
 input[type="text"],
-select {
+select,
+textarea {
   background: #ffffff;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   min-height: 44px;
   padding: 10px 12px;
   width: 100%;
+}
+
+textarea {
+  resize: vertical;
 }
 
 .user-form {
@@ -367,6 +392,31 @@ select {
   padding: 16px;
 }
 
+.resource-form {
+  align-items: end;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 120px minmax(0, 1fr);
+  max-width: 760px;
+  padding: 16px;
+}
+
+.resource-form textarea {
+  min-height: 84px;
+}
+
+.resource-form button {
+  grid-column: 2;
+  justify-self: start;
+}
+
+.resource-table {
+  min-width: 980px;
+}
+
 .inline-form {
   align-items: center;
   display: flex;
@@ -375,6 +425,17 @@ select {
 
 .inline-form input {
   min-width: 160px;
+}
+
+.danger-zone {
+  border-color: #f2b8b5;
+}
+
+.danger-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  max-width: 720px;
 }
 
 .empty-state {
@@ -386,6 +447,10 @@ select {
   gap: 12px;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   margin-bottom: 20px;
+}
+
+.dashboard-metrics {
+  margin-bottom: 18px;
 }
 
 .next-action-panel {
@@ -845,6 +910,16 @@ select {
   .user-form {
     align-items: stretch;
     grid-template-columns: 1fr;
+  }
+
+  .resource-form {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .resource-form button {
+    grid-column: auto;
+    justify-self: stretch;
   }
 
   .inline-form {

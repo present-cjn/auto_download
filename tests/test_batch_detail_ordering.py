@@ -64,7 +64,7 @@ def test_batch_work_state_prioritizes_failed_items() -> None:
 
 
 def test_batch_primary_action_for_ready_batch() -> None:
-    batch = {"status": "review_ready"}
+    batch = {"status": "confirmed"}
     counts = {
         "pending": 3,
         "failed": 0,
@@ -76,3 +76,18 @@ def test_batch_primary_action_for_ready_batch() -> None:
     assert action["code"] == "ready"
     assert action["title"] == "批次已准备好"
     assert action["cta"] == "开始下载待处理项"
+
+
+def test_batch_primary_action_for_precheck_ready_batch() -> None:
+    batch = {"status": "precheck_ready"}
+    counts = {
+        "pending": 3,
+        "failed": 0,
+        "downloading": 0,
+    }
+
+    action = batch_primary_action(batch, counts)
+
+    assert action["code"] == "needs_confirm"
+    assert action["title"] == "上传预检已完成"
+    assert action["cta"] == "确认导入"
