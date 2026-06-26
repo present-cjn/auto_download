@@ -3,8 +3,10 @@
 {% block content %}
 <section class="page-header">
   <div>
-    <h1>上传订单 Excel</h1>
-    <p>当前支持 `.xlsx`。请只保留一个订单工作表；上传后先解析并核对，不会立即下载。</p>
+    <h1 class="heading-with-help">
+      上传订单 Excel
+      <span class="help-tip" tabindex="0" aria-label="当前支持 .xlsx。请只保留一个订单工作表；上传后先解析并核对，不会立即下载。" data-tip="当前支持 .xlsx。请只保留一个订单工作表；上传后先解析并核对，不会立即下载。">?</span>
+    </h1>
   </div>
 </section>
 
@@ -17,9 +19,11 @@
 </section>
 
 <form class="upload-panel" method="post" action="/uploads" enctype="multipart/form-data">
-  <label for="file">选择订单表</label>
+  <label class="heading-with-help" for="file">
+    选择订单表
+    <span class="help-tip" tabindex="0" aria-label="上传后系统只做解析和预检。确认无误后，再在批次工作台启动插件下载。" data-tip="上传后系统只做解析和预检。确认无误后，再在批次工作台启动插件下载。">?</span>
+  </label>
   <input id="file" name="file" type="file" accept=".xlsx" required>
-  <p class="form-helper">上传后系统只做解析和预检。确认无误后，再在批次工作台启动插件下载。</p>
   <button class="button primary" type="submit">上传并解析</button>
 </form>
 {% endblock %}

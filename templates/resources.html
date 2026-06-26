@@ -59,16 +59,20 @@
 
 <section class="page-header">
   <div>
-    <h1>资料下载</h1>
-    <p>下载表头模板、浏览器插件压缩包和使用说明。只有开发者可以上传或停用资料。</p>
+    <h1 class="heading-with-help">
+      资料下载
+      <span class="help-tip" tabindex="0" aria-label="下载表头模板、浏览器插件压缩包和使用说明。只有开发者可以上传或停用资料。" data-tip="下载表头模板、浏览器插件压缩包和使用说明。只有开发者可以上传或停用资料。">?</span>
+    </h1>
   </div>
 </section>
 
 {% if current_user.role == "developer" %}
 <section class="review-section">
   <div class="section-heading">
-    <h2>上传资料</h2>
-    <p>表头模板仅允许 .xlsx，插件仅允许 .zip。</p>
+    <h2 class="heading-with-help">
+      上传资料
+      <span class="help-tip" tabindex="0" aria-label="表头模板仅允许 .xlsx，插件仅允许 .zip。" data-tip="表头模板仅允许 .xlsx，插件仅允许 .zip。">?</span>
+    </h2>
   </div>
   <form class="resource-form" method="post" action="/resources" enctype="multipart/form-data">
     <label for="title">名称</label>
@@ -91,8 +95,10 @@
 {% for category, label in resource_category_labels.items() %}
 <section class="review-section">
   <div class="section-heading">
-    <h2>{{ label }}</h2>
-    <p>{{ resource_groups.get(category, [])|length }} 个文件</p>
+    <h2 class="heading-with-help">
+      {{ label }}
+      <span class="help-tip" tabindex="0" aria-label="当前分类下有 {{ resource_groups.get(category, [])|length }} 个文件。" data-tip="当前分类下有 {{ resource_groups.get(category, [])|length }} 个文件。">?</span>
+    </h2>
   </div>
   {{ resource_table(resource_groups.get(category, []), "暂无可下载文件，请联系开发者上传。") }}
 </section>

@@ -94,6 +94,29 @@
   </div>
 </section>
 
+<section class="batch-settings-panel">
+  <form class="batch-download-name-form" method="post" action="/batches/{{ batch.id }}/download-name">
+    <label for="download_name" class="heading-with-help">
+      下载文件夹名
+      <span class="help-tip" tabindex="0" aria-label="插件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/；批次 ZIP 下载也会使用这个文件名。" data-tip="插件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/；批次 ZIP 下载也会使用这个文件名。">?</span>
+    </label>
+    <input
+      id="download_name"
+      name="download_name"
+      type="text"
+      value="{{ batch.download_name }}"
+      maxlength="120"
+      {% if not can_edit_download_name %}disabled{% endif %}
+      required
+    >
+    {% if can_edit_download_name %}
+    <button class="button subtle" type="submit">保存</button>
+    {% else %}
+    <span class="muted-text">下载中不可修改</span>
+    {% endif %}
+  </form>
+</section>
+
 <section class="next-action-panel work-{{ primary_action.code }}">
   <div>
     <span class="eyebrow">下一步</span>
@@ -158,8 +181,10 @@
 
 <section class="extension-panel" id="extension-panel">
   <div class="section-heading">
-    <h2>插件下载</h2>
-    <p>当前使用浏览器插件下载到本机，文件会保存到 Downloads/auto-download/batch-{{ batch.id }}/SKU/。</p>
+    <h2 class="heading-with-help">
+      插件下载
+      <span class="help-tip" tabindex="0" aria-label="当前使用浏览器插件下载到本机，文件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/。" data-tip="当前使用浏览器插件下载到本机，文件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/。">?</span>
+    </h2>
   </div>
   <div class="extension-grid">
     <div><span>{{ batch.display_name }}</span><label>当前订单批次</label></div>
@@ -568,8 +593,10 @@
 {% if import_summary %}
 <section class="preflight-panel" id="preflight-panel">
   <div class="section-heading">
-    <h2>导入预检</h2>
-    <p>用于提前发现表格和链接风险；当前只有 SKU 和 Design Link 缺失会阻止下载。</p>
+    <h2 class="heading-with-help">
+      导入预检
+      <span class="help-tip" tabindex="0" aria-label="用于提前发现表格和链接风险；当前只有 SKU 和 Design Link 缺失会阻止下载。" data-tip="用于提前发现表格和链接风险；当前只有 SKU 和 Design Link 缺失会阻止下载。">?</span>
+    </h2>
   </div>
   <div class="summary-grid">
     <div><span>{{ import_summary.sheet_name or "-" }}</span><label>工作表</label></div>
@@ -664,8 +691,10 @@
 
 <section class="review-section" id="order-detail-section">
   <div class="section-heading">
-    <h2>订单明细</h2>
-    <p>图片按 SKU 文件夹下载；同一订单下的多条 SKU 会用同一组底色和左侧标识展示。</p>
+    <h2 class="heading-with-help">
+      订单明细
+      <span class="help-tip" tabindex="0" aria-label="图片按 SKU 文件夹下载；同一订单下的多条 SKU 会用同一组底色和左侧标识展示。" data-tip="图片按 SKU 文件夹下载；同一订单下的多条 SKU 会用同一组底色和左侧标识展示。">?</span>
+    </h2>
   </div>
   <div class="filter-tabs" aria-label="SKU 状态筛选">
     <button class="filter-tab active" type="button" data-filter="all">全部 {{ filter_counts.all }}</button>

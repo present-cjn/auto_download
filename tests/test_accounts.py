@@ -15,11 +15,13 @@ from app.core.security import (
 )
 from app.main import (
     delete_batch as delete_batch_route,
+    download_archive,
     download_source_file,
     ensure_initial_accounts,
     enrich_batch_work_queue,
     require_batch_access,
     require_batch_operation,
+    update_batch_download_name as update_batch_download_name_route,
 )
 
 
@@ -223,6 +225,44 @@ def test_batch_business_display_name_sequences_by_user_and_day(tmp_path: Path) -
         db.DB_PATH = original_path
 
 
+def test_batch_download_name_defaults_from_uploaded_file_and_deduplicates_by_user(
+    tmp_path: Path,
+) -> None:
+    original_path = with_temp_db(tmp_path / "app.db")
+    try:
+        user_id = db.create_user("op", hash_password("pw"), role="operator")
+        other_id = db.create_user("other", hash_password("pw"), role="operator")
+
+        first = db.create_batch("June Orders.xlsx", Path("source.xlsx"), user_id)
+        second = db.create_batch("June Orders.xlsx", Path("source.xlsx"), user_id)
+        other = db.create_batch("June Orders.xlsx", Path("source.xlsx"), other_id)
+        unsafe = db.create_batch('bad:/name?.xlsx', Path("source.xlsx"), user_id)
+
+        assert db.get_batch(first)["download_name"] == "June Orders"
+        assert db.get_batch(second)["download_name"] == "June Orders-2"
+        assert db.get_batch(other)["download_name"] == "June Orders"
+        assert db.get_batch(unsafe)["download_name"] == "bad__name_"
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_init_db_backfills_legacy_batch_download_name(tmp_path: Path) -> None:
+    original_path = with_temp_db(tmp_path / "app.db")
+    try:
+        user_id = db.create_user("op", hash_password("pw"), role="operator")
+        first = db.create_batch("legacy.xlsx", Path("source.xlsx"), user_id)
+        second = db.create_batch("legacy.xlsx", Path("source.xlsx"), user_id)
+        with db.connect() as conn:
+            conn.execute("UPDATE import_batches SET download_name = NULL")
+
+        db.init_db(tmp_path / "app.db")
+
+        assert db.get_batch(first)["download_name"] == "legacy"
+        assert db.get_batch(second)["download_name"] == "legacy-2"
+    finally:
+        db.DB_PATH = original_path
+
+
 def test_init_db_backfills_legacy_batch_business_display_name(tmp_path: Path) -> None:
     original_path = with_temp_db(tmp_path / "app.db")
     try:
@@ -282,6 +322,86 @@ def test_developer_can_download_source_file(tmp_path: Path) -> None:
 
         assert Path(response.path) == source_path
         assert response.headers["content-disposition"].endswith('filename="orders.xlsx"')
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_batch_download_name_can_be_updated_by_owner_or_developer(tmp_path: Path) -> None:
+    original_path = with_temp_db(tmp_path / "app.db")
+    try:
+        developer_id = db.create_user("dev", hash_password("pw"), role="developer")
+        owner_id = db.create_user("owner", hash_password("pw"), role="operator")
+        other_id = db.create_user("other", hash_password("pw"), role="operator")
+        developer_token = session_for_user(developer_id)
+        owner_token = session_for_user(owner_id)
+        other_token = session_for_user(other_id)
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"), owner_id)
+
+        with pytest.raises(Exception) as forbidden:
+            update_batch_download_name_route(
+                FakeRequest(other_token),
+                batch_id,
+                download_name="other-name",
+            )
+        assert getattr(forbidden.value, "status_code") == 403
+
+        response = update_batch_download_name_route(
+            FakeRequest(owner_token),
+            batch_id,
+            download_name="June Orders",
+        )
+        assert response.status_code == 303
+        assert db.get_batch(batch_id)["download_name"] == "June Orders"
+
+        response = update_batch_download_name_route(
+            FakeRequest(developer_token),
+            batch_id,
+            download_name="Final:Orders?",
+        )
+        assert response.status_code == 303
+        assert db.get_batch(batch_id)["download_name"] == "Final_Orders_"
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_batch_download_name_cannot_be_updated_while_downloading(tmp_path: Path) -> None:
+    original_path = with_temp_db(tmp_path / "app.db")
+    try:
+        user_id = db.create_user("op", hash_password("pw"), role="operator")
+        token = session_for_user(user_id)
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"), user_id)
+        db.update_batch_status(batch_id, "processing")
+
+        with pytest.raises(Exception) as blocked:
+            update_batch_download_name_route(
+                FakeRequest(token),
+                batch_id,
+                download_name="new-name",
+            )
+        assert getattr(blocked.value, "status_code") == 400
+        assert db.get_batch(batch_id)["download_name"] == "orders"
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_archive_download_uses_batch_download_name(tmp_path: Path) -> None:
+    original_path = with_temp_db(tmp_path / "app.db")
+    try:
+        user_id = db.create_user("op", hash_password("pw"), role="operator")
+        token = session_for_user(user_id)
+        archive_path = tmp_path / "batch-1.zip"
+        archive_path.write_bytes(b"zip")
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"), user_id)
+        db.update_batch_download_name(batch_id, "Customer Orders")
+        db.set_batch_archive(batch_id, archive_path)
+
+        response = download_archive(FakeRequest(token), batch_id)
+
+        assert Path(response.path) == archive_path
+        assert (
+            "filename*=utf-8''Customer%20Orders.zip"
+            in response.headers["content-disposition"]
+        )
     finally:
         db.DB_PATH = original_path
 

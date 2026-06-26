@@ -98,7 +98,7 @@ def test_extension_download_items_use_header_session_and_batch_access(tmp_path: 
         ]
         assert payload["items"][0]["resource_kind"] == "file"
         assert payload["items"][0]["resource_id"] == "file123"
-        assert payload["items"][0]["sku_folder"] == f"auto-download/batch-{batch_id}/SKU-A"
+        assert payload["items"][0]["sku_folder"] == "auto-download/orders/SKU-A"
         assert payload["items"][1]["resource_kind"] == "folder"
         assert payload["items"][1]["resource_id"] == "folder123"
     finally:
@@ -124,7 +124,7 @@ def test_extension_success_and_failure_update_download_state(tmp_path: Path) -> 
                 "files": [
                     {
                         "file_name": "design-1-image.jpg",
-                        "local_path": "auto-download/batch-1/SKU-A/design-1-image.jpg",
+                        "local_path": "auto-download/orders/SKU-A/design-1-image.jpg",
                         "file_size": 12,
                     }
                 ]
@@ -143,7 +143,7 @@ def test_extension_success_and_failure_update_download_state(tmp_path: Path) -> 
                 "files": [
                     {
                         "file_name": "mockup-partial.jpg",
-                        "local_path": "auto-download/batch-1/SKU-A/mockup-partial.jpg",
+                        "local_path": "auto-download/orders/SKU-A/mockup-partial.jpg",
                         "file_size": 34,
                     }
                 ],

@@ -659,10 +659,10 @@ function googleDriveApiMediaUrl(fileId) {
 }
 
 async function getDownloadPipeline() {
-  const state = await chrome.storage.local.get({ downloadPipeline: DOWNLOAD_PIPELINE_BLOB });
-  return state.downloadPipeline === DOWNLOAD_PIPELINE_HEADERS
-    ? DOWNLOAD_PIPELINE_HEADERS
-    : DOWNLOAD_PIPELINE_BLOB;
+  const state = await chrome.storage.local.get({ downloadPipeline: DOWNLOAD_PIPELINE_HEADERS });
+  return state.downloadPipeline === DOWNLOAD_PIPELINE_BLOB
+    ? DOWNLOAD_PIPELINE_BLOB
+    : DOWNLOAD_PIPELINE_HEADERS;
 }
 
 function isImageMetadata(file) {

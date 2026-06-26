@@ -4,33 +4,48 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}订单设计图下载{% endblock %}</title>
+    <link rel="stylesheet" href="/static/vendor/tabler/tabler.min.css">
     <link rel="stylesheet" href="/static/styles.css">
   </head>
   <body>
-    <header class="topbar">
-      <a class="brand" href="/">订单设计图下载</a>
-      <nav class="nav">
-        <a href="/">工作台</a>
+    <div class="page">
+      <header class="navbar navbar-expand-md d-print-none app-navbar">
+        <div class="container-xl">
+          <a class="navbar-brand app-brand" href="/">订单设计图下载</a>
+          <div class="navbar-nav flex-row order-md-last align-items-center">
+            {% if current_user %}
+            <span class="user-chip">{{ current_user.username }} · {{ role_labels.get(current_user.role, current_user.role) }}</span>
+            <form method="post" action="/logout">
+              <button class="button subtle" type="submit">退出</button>
+            </form>
+            {% endif %}
+          </div>
+          <div class="navbar-nav app-nav">
+            <a class="nav-link" href="/">工作台</a>
         {% if current_user and current_user.role in ["developer", "admin"] %}
-        <a href="/#team-stats">统计</a>
+            <a class="nav-link" href="/#team-stats">统计</a>
+        {% endif %}
+        {% if current_user %}
+            <a class="nav-link" href="/quota">套餐</a>
         {% endif %}
         {% if current_user and current_user.role == "developer" %}
-        <a href="/users">用户</a>
+            <a class="nav-link" href="/users">用户</a>
         {% endif %}
         {% if current_user %}
-        <a href="/resources">资料下载</a>
+            <a class="nav-link" href="/resources">资料下载</a>
         {% endif %}
-        <a class="button primary" href="/uploads/new">上传 Excel</a>
-        {% if current_user %}
-        <span class="user-chip">{{ current_user.username }} · {{ role_labels.get(current_user.role, current_user.role) }}</span>
-        <form method="post" action="/logout">
-          <button class="button subtle" type="submit">退出</button>
-        </form>
-        {% endif %}
-      </nav>
-    </header>
-    <main class="page">
-      {% block content %}{% endblock %}
-    </main>
+            <a class="button primary" href="/uploads/new">上传 Excel</a>
+          </div>
+        </div>
+      </header>
+      <div class="page-wrapper">
+        <main class="page-body">
+          <div class="container-xl app-container">
+            {% block content %}{% endblock %}
+          </div>
+        </main>
+      </div>
+    </div>
+    <script src="/static/vendor/tabler/tabler.min.js"></script>
   </body>
 </html>

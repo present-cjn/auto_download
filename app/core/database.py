@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any, Optional
@@ -119,6 +120,17 @@ CREATE TABLE IF NOT EXISTS resource_files (
     version_note TEXT,
     status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'disabled')),
     uploaded_by_user_id INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+MONTHLY_TEAM_QUOTAS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS monthly_team_quotas (
+    quota_month TEXT PRIMARY KEY,
+    total_quota INTEGER NOT NULL DEFAULT 0,
+    note TEXT,
+    updated_by_user_id INTEGER REFERENCES users(id),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -287,6 +299,12 @@ def ensure_schema_columns(conn: sqlite3.Connection) -> None:
         ensure_column(
             conn,
             "import_batches",
+            "download_name",
+            "download_name TEXT",
+        )
+        ensure_column(
+            conn,
+            "import_batches",
             "business_date",
             "business_date TEXT",
         )
@@ -330,6 +348,96 @@ def batch_business_date_from_created_at(created_at: Optional[str]) -> str:
     if len(value) >= 10:
         return value[:10].replace("-", "")
     return "unknown"
+
+
+def safe_batch_download_name(name: str) -> str:
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned[:120].strip(" .") or "orders"
+
+
+def batch_download_name_from_file_name(file_name: str) -> str:
+    raw_name = str(file_name or "").strip()
+    stem = raw_name.rsplit(".", 1)[0] if "." in raw_name else raw_name
+    return safe_batch_download_name(stem)
+
+
+def unique_batch_download_name(
+    conn: sqlite3.Connection,
+    base_name: str,
+    created_by_user_id: Optional[int],
+    exclude_batch_id: Optional[int] = None,
+) -> str:
+    base = safe_batch_download_name(base_name)
+    user_key = int(created_by_user_id) if created_by_user_id is not None else -1
+    suffix = 1
+    while True:
+        candidate = base if suffix == 1 else f"{base}-{suffix}"
+        params: list[Any] = [user_key, candidate]
+        exclude_clause = ""
+        if exclude_batch_id is not None:
+            exclude_clause = "AND id != ?"
+            params.append(int(exclude_batch_id))
+        exists = conn.execute(
+            f"""
+            SELECT 1
+            FROM import_batches
+            WHERE COALESCE(created_by_user_id, -1) = ?
+              AND download_name = ?
+              {exclude_clause}
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+        if not exists:
+            return candidate
+        suffix += 1
+
+
+def backfill_missing_batch_download_names(conn: sqlite3.Connection) -> None:
+    if not table_columns(conn, "import_batches"):
+        return
+    rows = conn.execute(
+        """
+        SELECT id, file_name, created_by_user_id, download_name
+        FROM import_batches
+        ORDER BY COALESCE(created_by_user_id, -1), created_at, id
+        """
+    ).fetchall()
+    for row in rows:
+        current_name = str(row["download_name"] or "").strip()
+        if current_name:
+            normalized_name = safe_batch_download_name(current_name)
+            if normalized_name != current_name:
+                normalized_name = unique_batch_download_name(
+                    conn,
+                    normalized_name,
+                    row["created_by_user_id"],
+                    exclude_batch_id=int(row["id"]),
+                )
+                conn.execute(
+                    """
+                    UPDATE import_batches
+                    SET download_name = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (normalized_name, int(row["id"])),
+                )
+            continue
+        download_name = unique_batch_download_name(
+            conn,
+            batch_download_name_from_file_name(row["file_name"]),
+            row["created_by_user_id"],
+            exclude_batch_id=int(row["id"]),
+        )
+        conn.execute(
+            """
+            UPDATE import_batches
+            SET download_name = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (download_name, int(row["id"])),
+        )
 
 
 def assign_missing_batch_business_ids(conn: sqlite3.Connection) -> None:
@@ -593,6 +701,7 @@ def init_db(db_path: Optional[Path] = None) -> None:
         migrate_users_schema(conn)
         conn.executescript(USERS_SCHEMA)
         conn.executescript(RESOURCE_FILES_SCHEMA)
+        conn.executescript(MONTHLY_TEAM_QUOTAS_SCHEMA)
         conn.executescript(SESSIONS_SCHEMA)
         conn.executescript(EXTENSION_EVENTS_SCHEMA)
         conn.executescript(BATCH_DELETION_AUDIT_SCHEMA)
@@ -601,6 +710,7 @@ def init_db(db_path: Optional[Path] = None) -> None:
             CREATE TABLE IF NOT EXISTS import_batches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_name TEXT NOT NULL,
+                download_name TEXT,
                 source_path TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'uploaded',
                 order_count INTEGER NOT NULL DEFAULT 0,
@@ -696,6 +806,7 @@ def init_db(db_path: Optional[Path] = None) -> None:
             """
         )
         ensure_schema_columns(conn)
+        backfill_missing_batch_download_names(conn)
         assign_missing_batch_business_ids(conn)
         backfill_missing_download_items(conn)
         refresh_all_batch_counts(conn)
@@ -965,16 +1076,22 @@ def create_batch(
                 (user_key, business_date),
             ).fetchone()[0]
         )
+        download_name = unique_batch_download_name(
+            conn,
+            batch_download_name_from_file_name(file_name),
+            created_by_user_id,
+        )
         cursor = conn.execute(
             """
             INSERT INTO import_batches (
-                file_name, source_path, status, created_by_user_id,
+                file_name, download_name, source_path, status, created_by_user_id,
                 business_date, user_daily_sequence
             )
-            VALUES (?, ?, 'uploaded', ?, ?, ?)
+            VALUES (?, ?, ?, 'uploaded', ?, ?, ?)
             """,
             (
                 file_name,
+                download_name,
                 str(source_path),
                 created_by_user_id,
                 business_date,
@@ -982,6 +1099,35 @@ def create_batch(
             ),
         )
         return int(cursor.lastrowid)
+
+
+def update_batch_download_name(batch_id: int, download_name: str) -> bool:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, created_by_user_id
+            FROM import_batches
+            WHERE id = ?
+            """,
+            (batch_id,),
+        ).fetchone()
+        if not row:
+            return False
+        unique_name = unique_batch_download_name(
+            conn,
+            download_name,
+            row["created_by_user_id"],
+            exclude_batch_id=batch_id,
+        )
+        cursor = conn.execute(
+            """
+            UPDATE import_batches
+            SET download_name = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (unique_name, batch_id),
+        )
+        return cursor.rowcount > 0
 
 
 def confirm_batch(batch_id: int) -> bool:
@@ -1403,6 +1549,114 @@ def download_usage_totals(rows: list[dict[str, Any]]) -> dict[str, int]:
     return {field: sum(int(row.get(field) or 0) for row in rows) for field in fields}
 
 
+def get_monthly_team_quota(quota_month: str) -> dict[str, Any]:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                mtq.*,
+                u.username AS updated_by_username
+            FROM monthly_team_quotas mtq
+            LEFT JOIN users u ON u.id = mtq.updated_by_user_id
+            WHERE mtq.quota_month = ?
+            """,
+            (quota_month,),
+        ).fetchone()
+        if row:
+            return row_to_dict(row)
+        return {
+            "quota_month": quota_month,
+            "total_quota": 0,
+            "note": "",
+            "updated_by_user_id": None,
+            "updated_by_username": None,
+            "created_at": None,
+            "updated_at": None,
+        }
+
+
+def set_monthly_team_quota(
+    quota_month: str, total_quota: int, updated_by_user_id: int, note: str = ""
+) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO monthly_team_quotas (
+                quota_month, total_quota, note, updated_by_user_id
+            )
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(quota_month) DO UPDATE SET
+                total_quota = excluded.total_quota,
+                note = excluded.note,
+                updated_by_user_id = excluded.updated_by_user_id,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (quota_month, max(0, int(total_quota)), note.strip(), updated_by_user_id),
+        )
+
+
+def list_monthly_quota_usage_by_user(quota_month: str) -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                u.id AS user_id,
+                u.username,
+                u.role,
+                u.status,
+                COALESCE(usage.downloaded_count, 0) AS downloaded_count
+            FROM users u
+            LEFT JOIN (
+                SELECT
+                    ib.created_by_user_id AS user_id,
+                    COUNT(*) AS downloaded_count
+                FROM download_items di
+                JOIN import_batches ib ON ib.id = di.batch_id
+                JOIN users owner ON owner.id = ib.created_by_user_id
+                WHERE di.status = 'downloaded'
+                  AND di.completed_at IS NOT NULL
+                  AND substr(di.completed_at, 1, 7) = ?
+                  AND owner.role IN ('admin', 'operator')
+                GROUP BY ib.created_by_user_id
+            ) usage ON usage.user_id = u.id
+            WHERE u.role IN ('admin', 'operator')
+            ORDER BY downloaded_count DESC, u.role, u.username
+            """,
+            (quota_month,),
+        ).fetchall()
+        return [row_to_dict(row) for row in rows]
+
+
+def count_unassigned_successful_downloads() -> int:
+    with connect() as conn:
+        return int(
+            conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM download_items di
+                JOIN import_batches ib ON ib.id = di.batch_id
+                JOIN users owner ON owner.id = ib.created_by_user_id
+                WHERE di.status = 'downloaded'
+                  AND di.completed_at IS NULL
+                  AND owner.role IN ('admin', 'operator')
+                """
+            ).fetchone()[0]
+        )
+
+
+def monthly_quota_totals(
+    quota: dict[str, Any], usage_rows: list[dict[str, Any]]
+) -> dict[str, int]:
+    total_quota = max(0, int(quota.get("total_quota") or 0))
+    used_count = sum(int(row.get("downloaded_count") or 0) for row in usage_rows)
+    return {
+        "total_quota": total_quota,
+        "used_count": used_count,
+        "remaining_count": max(0, total_quota - used_count),
+        "overage_count": max(0, used_count - total_quota),
+    }
+
+
 def get_batch(batch_id: int) -> Optional[dict[str, Any]]:
     with connect() as conn:
         row = conn.execute(
@@ -1518,9 +1772,11 @@ def get_pending_download_items(batch_id: int) -> list[dict[str, Any]]:
             """
             SELECT
                 di.*,
-                oi.sku AS item_sku
+                oi.sku AS item_sku,
+                ib.download_name AS batch_download_name
             FROM download_items di
             JOIN order_items oi ON oi.id = di.order_item_id
+            JOIN import_batches ib ON ib.id = di.batch_id
             WHERE di.batch_id = ? AND di.status IN ('pending', 'failed')
             ORDER BY di.id
             """,
@@ -1536,9 +1792,11 @@ def get_extension_download_items(batch_id: int, limit: int = 50) -> list[dict[st
             """
             SELECT
                 di.*,
-                oi.sku AS item_sku
+                oi.sku AS item_sku,
+                ib.download_name AS batch_download_name
             FROM download_items di
             JOIN order_items oi ON oi.id = di.order_item_id
+            JOIN import_batches ib ON ib.id = di.batch_id
             WHERE di.batch_id = ? AND di.status IN ('pending', 'failed')
             ORDER BY CASE di.status WHEN 'pending' THEN 1 WHEN 'failed' THEN 2 ELSE 3 END, di.id
             LIMIT ?
@@ -1573,9 +1831,11 @@ def get_next_extension_download_item(
             f"""
             SELECT
                 di.*,
-                oi.sku AS item_sku
+                oi.sku AS item_sku,
+                ib.download_name AS batch_download_name
             FROM download_items di
             JOIN order_items oi ON oi.id = di.order_item_id
+            JOIN import_batches ib ON ib.id = di.batch_id
             WHERE di.batch_id = ?
               AND (
                 di.status = 'pending'
@@ -1597,9 +1857,11 @@ def get_failed_download_items(batch_id: int) -> list[dict[str, Any]]:
             """
             SELECT
                 di.*,
-                oi.sku AS item_sku
+                oi.sku AS item_sku,
+                ib.download_name AS batch_download_name
             FROM download_items di
             JOIN order_items oi ON oi.id = di.order_item_id
+            JOIN import_batches ib ON ib.id = di.batch_id
             WHERE di.batch_id = ? AND di.status = 'failed'
             ORDER BY di.id
             """,
@@ -1614,9 +1876,11 @@ def get_download_item(download_item_id: int) -> Optional[dict[str, Any]]:
             """
             SELECT
                 di.*,
-                oi.sku AS item_sku
+                oi.sku AS item_sku,
+                ib.download_name AS batch_download_name
             FROM download_items di
             JOIN order_items oi ON oi.id = di.order_item_id
+            JOIN import_batches ib ON ib.id = di.batch_id
             WHERE di.id = ?
             """,
             (download_item_id,),
@@ -1683,9 +1947,11 @@ def dispatch_download_item(download_item_id: int) -> Optional[dict[str, Any]]:
             """
             SELECT
                 di.*,
-                oi.sku AS item_sku
+                oi.sku AS item_sku,
+                ib.download_name AS batch_download_name
             FROM download_items di
             JOIN order_items oi ON oi.id = di.order_item_id
+            JOIN import_batches ib ON ib.id = di.batch_id
             WHERE di.id = ?
             """,
             (download_item_id,),

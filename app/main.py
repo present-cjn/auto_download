@@ -395,6 +395,48 @@ def normalized_limit(limit: int) -> Optional[int]:
     return limit if limit > 0 else None
 
 
+def current_quota_month() -> str:
+    return datetime.now().strftime("%Y-%m")
+
+
+def normalize_quota_month(value: str) -> str:
+    value = (value or "").strip() or current_quota_month()
+    try:
+        datetime.strptime(value, "%Y-%m")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="月份格式必须是 YYYY-MM") from exc
+    return value
+
+
+def monthly_quota_context(user: dict, quota_month: str) -> dict[str, Any]:
+    quota = db.get_monthly_team_quota(quota_month)
+    usage_rows = db.list_monthly_quota_usage_by_user(quota_month)
+    visible_usage_rows = (
+        usage_rows
+        if user["role"] in {"developer", "admin"}
+        else [row for row in usage_rows if row.get("user_id") == user["id"]]
+    )
+    totals = db.monthly_quota_totals(quota, usage_rows)
+    quota_percent = 0
+    if int(totals["total_quota"]) > 0:
+        quota_percent = min(
+            100,
+            round(int(totals["used_count"]) * 100 / int(totals["total_quota"])),
+        )
+    return {
+        "quota_month": quota_month,
+        "quota": quota,
+        "quota_usage_rows": visible_usage_rows,
+        "quota_totals": totals,
+        "quota_percent": quota_percent,
+        "unassigned_success_count": (
+            db.count_unassigned_successful_downloads()
+            if user["role"] == "developer"
+            else 0
+        ),
+    }
+
+
 def parse_db_timestamp(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
@@ -559,7 +601,8 @@ def drive_resource_payload(url: str) -> dict[str, str]:
 def extension_download_item_payload(item: dict[str, Any]) -> dict[str, Any]:
     source_type = item.get("source_type") or "design"
     sku = item.get("item_sku") or item.get("sku") or f"row-{item['row_number']}"
-    folder = f"auto-download/batch-{item['batch_id']}/{safe_filename(str(sku))}"
+    download_name = item.get("batch_download_name") or f"batch-{item['batch_id']}"
+    folder = f"auto-download/{safe_filename(str(download_name))}/{safe_filename(str(sku))}"
     payload = {
         "download_item_id": int(item["id"]),
         "batch_id": int(item["batch_id"]),
@@ -740,6 +783,36 @@ def index(request: Request):
             usage_totals=db.download_usage_totals(usage_rows),
         ),
     )
+
+
+@app.get("/quota")
+def quota_page(request: Request, month: str = ""):
+    user = require_user(request)
+    quota_month = normalize_quota_month(month)
+    return templates.TemplateResponse(
+        request=request,
+        name="quota.html",
+        context=template_context(
+            user,
+            **monthly_quota_context(user, quota_month),
+        ),
+    )
+
+
+@app.post("/quota")
+def update_quota(
+    request: Request,
+    quota_month: str = Form(""),
+    total_quota: int = Form(0),
+    note: str = Form(""),
+):
+    user = require_user(request)
+    require_developer(user)
+    normalized_month = normalize_quota_month(quota_month)
+    if int(total_quota) < 0:
+        raise HTTPException(status_code=400, detail="额度不能小于 0")
+    db.set_monthly_team_quota(normalized_month, int(total_quota), int(user["id"]), note)
+    return RedirectResponse(f"/quota?month={normalized_month}", status_code=303)
 
 
 @app.get("/uploads/new")
@@ -962,6 +1035,11 @@ def batch_detail(request: Request, batch_id: int):
     status_counts = db.get_batch_status_counts(batch_id)
     handled_count = int(batch["success_count"]) + int(status_counts["manual_done"])
     primary_action = batch_primary_action(batch, status_counts)
+    can_edit_download_name = (
+        can_operate
+        and batch["status"] != "processing"
+        and not db.batch_has_downloading_items(batch_id)
+    )
     if not can_operate:
         primary_action = {
             **primary_action,
@@ -1013,6 +1091,7 @@ def batch_detail(request: Request, batch_id: int):
             primary_action=primary_action,
             filter_counts=filter_counts,
             can_operate=can_operate,
+            can_edit_download_name=can_edit_download_name,
         ),
     )
 
@@ -1078,6 +1157,26 @@ def discard_batch(request: Request, batch_id: int):
     return RedirectResponse("/", status_code=303)
 
 
+@app.post("/batches/{batch_id}/download-name")
+def update_batch_download_name(
+    request: Request,
+    batch_id: int,
+    download_name: str = Form(""),
+):
+    user = require_user(request)
+    batch = require_batch_operation(batch_id, user)
+    if batch["status"] == "processing" or db.batch_has_downloading_items(batch_id):
+        raise HTTPException(status_code=400, detail="批次正在下载中，不能修改下载文件夹名。")
+    if not download_name.strip():
+        raise HTTPException(status_code=400, detail="下载文件夹名不能为空。")
+    cleaned_name = safe_filename(download_name).strip(" .")
+    if not cleaned_name:
+        raise HTTPException(status_code=400, detail="下载文件夹名不能为空。")
+    if not db.update_batch_download_name(batch_id, cleaned_name):
+        raise HTTPException(status_code=404, detail="Batch not found")
+    return RedirectResponse(f"/batches/{batch_id}", status_code=303)
+
+
 @app.post("/batches/{batch_id}/delete")
 def delete_batch(
     request: Request,
@@ -1113,6 +1212,7 @@ def extension_download_items(request: Request, batch_id: int, limit: int = 50):
         "batch": {
             "id": int(batch["id"]),
             "file_name": batch["file_name"],
+            "download_name": batch["download_name"],
             "status": batch["status"],
         },
         "status_counts": counts,
@@ -1372,7 +1472,7 @@ def download_archive(request: Request, batch_id: int):
     return FileResponse(
         archive_path,
         media_type="application/zip",
-        filename=f"batch-{batch_id}-orders.zip",
+        filename=f"{safe_filename(str(batch.get('download_name') or f'batch-{batch_id}'))}.zip",
     )
 
 

@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}套餐统计{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <h1 class="heading-with-help">
+      套餐统计
+      <span class="help-tip" tabindex="0" aria-label="按下载成功时间统计本月成功下载链接数；开发者账号不计入套餐消耗。" data-tip="按下载成功时间统计本月成功下载链接数；开发者账号不计入套餐消耗。">?</span>
+    </h1>
+  </div>
+  <form class="inline-form" method="get" action="/quota">
+    <label for="month">月份</label>
+    <input id="month" name="month" type="month" value="{{ quota_month }}">
+    <button class="button subtle" type="submit">查看</button>
+  </form>
+</section>
+
+{% if current_user.role in ["developer", "admin"] %}
+<section class="metrics dashboard-metrics">
+  <div><span>{{ quota_totals.total_quota }}</span><label>团队月额度</label></div>
+  <div><span>{{ quota_totals.used_count }}</span><label>已用成功链接</label></div>
+  <div><span>{{ quota_totals.remaining_count }}</span><label>剩余额度</label></div>
+  <div><span>{{ quota_totals.overage_count }}</span><label>超额</label></div>
+</section>
+<section class="quota-progress-panel">
+  <div class="progress-copy">
+    <div>
+      <strong>{{ quota_totals.used_count }} / {{ quota_totals.total_quota }}</strong>
+      <span class="heading-with-help">
+        额度使用进度
+        <span class="help-tip" tabindex="0" aria-label="本月团队共享额度使用进度。" data-tip="本月团队共享额度使用进度。">?</span>
+      </span>
+    </div>
+    <span>{{ quota_percent }}%</span>
+  </div>
+  <div class="progress-bar">
+    <div style="width: {{ quota_percent }}%;"></div>
+  </div>
+</section>
+{% else %}
+{% set own_usage = quota_usage_rows[0].downloaded_count if quota_usage_rows else 0 %}
+<section class="metrics dashboard-metrics">
+  <div><span>{{ own_usage }}</span><label>我的本月成功链接</label></div>
+</section>
+{% endif %}
+
+{% if current_user.role == "developer" %}
+<section class="review-section">
+  <div class="section-heading">
+    <h2 class="heading-with-help">
+      设置团队月额度
+      <span class="help-tip" tabindex="0" aria-label="{{ quota_month }} 的共享额度，管理员和业务员共同消耗。" data-tip="{{ quota_month }} 的共享额度，管理员和业务员共同消耗。">?</span>
+    </h2>
+  </div>
+  <form class="quota-form" method="post" action="/quota">
+    <input type="hidden" name="quota_month" value="{{ quota_month }}">
+    <label for="totalQuota">团队月额度</label>
+    <input id="totalQuota" name="total_quota" type="number" min="0" value="{{ quota.total_quota }}" required>
+    <label for="note">备注</label>
+    <input id="note" name="note" type="text" value="{{ quota.note or '' }}" placeholder="例如：2026-06 客户套餐">
+    <button class="button primary" type="submit">保存额度</button>
+  </form>
+  {% if quota.updated_at %}
+  <p class="form-helper">最近更新：{{ quota.updated_at }} · {{ quota.updated_by_username or "-" }}</p>
+  {% endif %}
+</section>
+
+{% if unassigned_success_count %}
+<section class="notice">
+  有 {{ unassigned_success_count }} 个历史成功下载缺少完成时间，暂未归属到任何月份。
+</section>
+{% endif %}
+{% endif %}
+
+<section class="review-section">
+  <div class="section-heading">
+    <h2 class="heading-with-help">
+      {% if current_user.role in ["developer", "admin"] %}账号使用量{% else %}我的使用量{% endif %}
+      <span class="help-tip" tabindex="0" aria-label="只统计 {{ quota_month }} 内状态为成功下载的链接。" data-tip="只统计 {{ quota_month }} 内状态为成功下载的链接。">?</span>
+    </h2>
+  </div>
+  {% if quota_usage_rows %}
+  <div class="table-wrap compact">
+    <table>
+      <thead>
+        <tr>
+          <th>用户</th>
+          <th>角色</th>
+          <th>状态</th>
+          <th>成功链接数</th>
+          {% if current_user.role in ["developer", "admin"] %}
+          <th>占用比例</th>
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in quota_usage_rows %}
+        <tr>
+          <td class="sku-cell">{{ row.username }}</td>
+          <td>{{ role_labels.get(row.role, row.role) }}</td>
+          <td><span class="status {{ row.status }}">{{ "启用" if row.status == "active" else "停用" }}</span></td>
+          <td>{{ row.downloaded_count }}</td>
+          {% if current_user.role in ["developer", "admin"] %}
+          <td>
+            {% if quota_totals.used_count %}
+            {{ (row.downloaded_count * 100 / quota_totals.used_count)|round|int }}%
+            {% else %}
+            0%
+            {% endif %}
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">当前月份暂无成功下载记录。</p>
+  {% endif %}
+</section>
+{% endblock %}

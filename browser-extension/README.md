@@ -41,7 +41,7 @@ download is an image before reporting success.
 Files are saved under the browser Downloads directory:
 
 ```text
-auto-download/batch-<batch_id>/<sku>/<source_type>-<download_item_id>-<original_name>
+auto-download/<download_name>/<sku>/<source_type>-<download_item_id>-<original_name>
 ```
 
 Design and mockup images are intentionally saved into the same SKU folder.
@@ -59,32 +59,31 @@ target path, attempt count, and Chrome download error.
 
 If Chrome leaves an orphaned Drive-ID file directly in Downloads after an
 interrupted download, ignore or delete that orphan. The official output is only
-the file saved under `auto-download/batch-<batch_id>/<sku>/`.
+the file saved under `auto-download/<download_name>/<sku>/`.
 
 If Chrome downloads an HTML page or another non-image file, the extension deletes
 that bad local file and marks the item as failed. Retry failed items from the Web
 batch page; do not click continue in Chrome's download bar.
 
-## Experimental download pipeline
+## Download pipeline
 
-The default Drive download pipeline still fetches media through the extension
-and passes an object URL to Chrome downloads. To test whether Chrome can stream
-Drive media directly through the downloads manager with OAuth headers, open the
+The default Drive download pipeline streams Drive media through the Chrome
+downloads manager with OAuth headers. No manual pipeline setup is required after
+installing or reloading the extension.
+
+To temporarily return to the older blob pipeline for troubleshooting, open the
 extension service worker console and run:
 
 ```js
-chrome.storage.local.set({ downloadPipeline: "headers" });
+chrome.storage.local.set({ downloadPipeline: "blob" });
 ```
 
-Then reload the extension and retry a small batch. To return to the default
-pipeline:
+Then reload the extension and retry a small batch. To restore the default
+headers pipeline:
 
 ```js
 chrome.storage.local.remove("downloadPipeline");
 ```
-
-Use the experimental pipeline only for internal validation until it has covered
-single images, folders, shared drive files, and permission failures.
 
 ## Diagnostic event log
 
