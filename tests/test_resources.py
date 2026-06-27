@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 from starlette.requests import Request
@@ -70,6 +72,29 @@ def create_stored_resource(
     db.update_resource_file_storage(resource_id, path, path.stat().st_size)
     db.update_resource_file_status(resource_id, status)
     return resource_id
+
+
+def create_browser_extension_dir(tmp_path: Path, version: str = "0.1.0") -> Path:
+    extension_dir = tmp_path / "browser-extension"
+    extension_dir.mkdir()
+    files = {
+        "manifest.json": json.dumps(
+            {
+                "manifest_version": 3,
+                "name": "Test Extension",
+                "version": version,
+            }
+        ),
+        "service_worker.js": "console.log('worker v1');\n",
+        "content_script.js": "console.log('content');\n",
+        "popup.html": "<main>popup</main>\n",
+        "popup.css": "body { color: black; }\n",
+        "popup.js": "console.log('popup');\n",
+        "README.md": "not packaged\n",
+    }
+    for filename, content in files.items():
+        (extension_dir / filename).write_text(content, encoding="utf-8")
+    return extension_dir
 
 
 def test_developer_can_upload_resource_and_page_groups_it(
@@ -213,3 +238,87 @@ def test_missing_resource_file_returns_404(isolated_app: Path) -> None:
         app_main.download_resource(request, resource_id)
 
     assert getattr(response.value, "status_code") == 404
+
+
+def test_browser_extension_auto_publish_creates_active_zip(
+    isolated_app: Path, monkeypatch
+) -> None:
+    extension_dir = create_browser_extension_dir(isolated_app)
+    developer_id = db.create_user("dev", hash_password("pw"), role="developer")
+    monkeypatch.setattr(app_main, "AUTO_BROWSER_EXTENSION_DIR", extension_dir)
+    monkeypatch.setattr(
+        app_main,
+        "initial_developer_credentials",
+        lambda: ("dev", "pw"),
+    )
+
+    resource_id = app_main.publish_browser_extension_resource()
+
+    assert resource_id is not None
+    resource = db.get_resource_file(resource_id, include_disabled=True)
+    assert resource["category"] == "browser_extension"
+    assert resource["status"] == "active"
+    assert resource["uploaded_by_user_id"] == developer_id
+    assert resource["original_file_name"].startswith("browser-extension-0.1.0-")
+    assert "source_hash=" in resource["version_note"]
+    zip_path = Path(resource["storage_path"])
+    assert zip_path.exists()
+    with ZipFile(zip_path) as archive:
+        assert sorted(archive.namelist()) == sorted(app_main.AUTO_BROWSER_EXTENSION_FILES)
+        assert "README.md" not in archive.namelist()
+
+
+def test_browser_extension_auto_publish_is_idempotent(
+    isolated_app: Path, monkeypatch
+) -> None:
+    extension_dir = create_browser_extension_dir(isolated_app)
+    db.create_user("dev", hash_password("pw"), role="developer")
+    monkeypatch.setattr(app_main, "AUTO_BROWSER_EXTENSION_DIR", extension_dir)
+    monkeypatch.setattr(
+        app_main,
+        "initial_developer_credentials",
+        lambda: ("dev", "pw"),
+    )
+
+    first_id = app_main.publish_browser_extension_resource()
+    second_id = app_main.publish_browser_extension_resource()
+    rows = [
+        row
+        for row in db.list_resource_files(include_disabled=True)
+        if row["category"] == "browser_extension"
+    ]
+
+    assert first_id == second_id
+    assert len(rows) == 1
+    assert rows[0]["status"] == "active"
+
+
+def test_browser_extension_auto_publish_disables_old_versions(
+    isolated_app: Path, monkeypatch
+) -> None:
+    extension_dir = create_browser_extension_dir(isolated_app)
+    db.create_user("dev", hash_password("pw"), role="developer")
+    monkeypatch.setattr(app_main, "AUTO_BROWSER_EXTENSION_DIR", extension_dir)
+    monkeypatch.setattr(
+        app_main,
+        "initial_developer_credentials",
+        lambda: ("dev", "pw"),
+    )
+
+    old_id = app_main.publish_browser_extension_resource()
+    (extension_dir / "service_worker.js").write_text(
+        "console.log('worker v2');\n",
+        encoding="utf-8",
+    )
+    new_id = app_main.publish_browser_extension_resource()
+    rows = [
+        row
+        for row in db.list_resource_files(include_disabled=True)
+        if row["category"] == "browser_extension"
+    ]
+    active_rows = [row for row in rows if row["status"] == "active"]
+    disabled_rows = [row for row in rows if row["status"] == "disabled"]
+
+    assert old_id != new_id
+    assert [row["id"] for row in active_rows] == [new_id]
+    assert [row["id"] for row in disabled_rows] == [old_id]

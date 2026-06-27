@@ -14,6 +14,7 @@ from app.core.security import (
     verify_password,
 )
 from app.main import (
+    confirm_batch,
     delete_batch as delete_batch_route,
     download_archive,
     download_source_file,
@@ -360,6 +361,46 @@ def test_batch_download_name_can_be_updated_by_owner_or_developer(tmp_path: Path
         )
         assert response.status_code == 303
         assert db.get_batch(batch_id)["download_name"] == "Final_Orders_"
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_confirm_batch_can_set_download_name(tmp_path: Path) -> None:
+    original_path = with_temp_db(tmp_path / "app.db")
+    try:
+        user_id = db.create_user("owner", hash_password("pw"), role="operator")
+        token = session_for_user(user_id)
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"), user_id)
+        db.update_batch_status(batch_id, "precheck_ready")
+
+        response = confirm_batch(
+            FakeRequest(token),
+            batch_id,
+            download_name=" June Orders ",
+        )
+        batch = db.get_batch(batch_id)
+
+        assert response.status_code == 303
+        assert response.headers["location"] == f"/batches/{batch_id}"
+        assert batch["status"] == "confirmed"
+        assert batch["download_name"] == "June Orders"
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_confirm_batch_rejects_empty_download_name(tmp_path: Path) -> None:
+    original_path = with_temp_db(tmp_path / "app.db")
+    try:
+        user_id = db.create_user("owner", hash_password("pw"), role="operator")
+        token = session_for_user(user_id)
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"), user_id)
+        db.update_batch_status(batch_id, "precheck_ready")
+
+        with pytest.raises(Exception) as exc_info:
+            confirm_batch(FakeRequest(token), batch_id, download_name="   ")
+
+        assert getattr(exc_info.value, "status_code") == 400
+        assert db.get_batch(batch_id)["status"] == "precheck_ready"
     finally:
         db.DB_PATH = original_path
 

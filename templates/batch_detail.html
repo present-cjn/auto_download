@@ -72,89 +72,159 @@
     </p>
   </div>
   <div class="actions">
-    {% if can_operate and batch.status == "precheck_ready" %}
-    <form method="post" action="/batches/{{ batch.id }}/confirm">
-      <button class="button primary" type="submit">确认导入</button>
-    </form>
-    {% endif %}
-    {% if can_operate and batch.status in ["uploaded", "parsing", "precheck_ready", "precheck_failed", "confirmed"] %}
-    <form method="post" action="/batches/{{ batch.id }}/discard">
-      <button class="button subtle" type="submit">作废记录</button>
-    </form>
-    {% endif %}
-    <a class="button subtle" href="/batches/{{ batch.id }}/speed-report">速度报告</a>
     {% if current_user.role == "developer" %}
     <a class="button subtle" href="/batches/{{ batch.id }}/source-file">下载原始表格</a>
-    {% endif %}
-    {% if batch_archive_ready %}
-    <a class="button subtle" href="/batches/{{ batch.id }}/download.zip">一键下载全部订单</a>
-    {% else %}
-    <span class="button subtle disabled" aria-disabled="true">一键下载全部订单</span>
     {% endif %}
   </div>
 </section>
 
-<section class="batch-settings-panel">
-  <form class="batch-download-name-form" method="post" action="/batches/{{ batch.id }}/download-name">
-    <label for="download_name" class="heading-with-help">
+<nav class="batch-tabs" aria-label="批次页面">
+  <a class="batch-tab {% if active_tab == 'precheck' %}active{% endif %}" href="/batches/{{ batch.id }}?tab=precheck">预检情况</a>
+  {% if can_show_download_tab %}
+  <a class="batch-tab {% if active_tab == 'download' %}active{% endif %}" href="/batches/{{ batch.id }}?tab=download">下载页面</a>
+  {% else %}
+  <span class="batch-tab disabled" aria-disabled="true">下载页面</span>
+  {% endif %}
+</nav>
+
+{% if active_tab == "precheck" %}
+{% if batch.status == "precheck_ready" and can_operate %}
+<section class="confirm-import-panel">
+  <div>
+    <span class="eyebrow">预检完成</span>
+    <h2>确认导入并设置下载文件夹</h2>
+    <p>确认后进入下载页，图片会保存到这个文件夹下。</p>
+    <form method="post" action="/batches/{{ batch.id }}/discard">
+      <button class="button danger" type="submit">删除本次记录</button>
+    </form>
+  </div>
+  <form class="confirm-import-form" method="post" action="/batches/{{ batch.id }}/confirm">
+    <label for="confirm_download_name" class="heading-with-help">
       下载文件夹名
-      <span class="help-tip" tabindex="0" aria-label="插件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/；批次 ZIP 下载也会使用这个文件名。" data-tip="插件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/；批次 ZIP 下载也会使用这个文件名。">?</span>
+      <span class="help-tip" tabindex="0" aria-label="默认来自表格文件名；插件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/。" data-tip="默认来自表格文件名；插件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/。">?</span>
     </label>
     <input
-      id="download_name"
+      id="confirm_download_name"
       name="download_name"
       type="text"
       value="{{ batch.download_name }}"
       maxlength="120"
-      {% if not can_edit_download_name %}disabled{% endif %}
       required
     >
-    {% if can_edit_download_name %}
-    <button class="button subtle" type="submit">保存</button>
-    {% else %}
-    <span class="muted-text">下载中不可修改</span>
-    {% endif %}
+    <button class="button primary" type="submit">确认导入</button>
   </form>
 </section>
+{% elif can_operate and batch.status in ["uploaded", "parsing", "precheck_failed"] %}
+<section class="precheck-actions-panel">
+  <form method="post" action="/batches/{{ batch.id }}/discard">
+    <button class="button danger" type="submit">删除本次记录</button>
+  </form>
+</section>
+{% endif %}
 
-<section class="next-action-panel work-{{ primary_action.code }}">
-  <div>
-    <span class="eyebrow">下一步</span>
-    <h2>{{ primary_action.title }}</h2>
-    <p>{{ primary_action.body }}</p>
-  </div>
-  <div class="next-action-controls">
-    {% if not can_operate %}
-    <a class="button primary" href="#order-detail-section">{{ primary_action.cta }}</a>
-    {% elif primary_action.code == "needs_confirm" %}
-    <form method="post" action="/batches/{{ batch.id }}/confirm">
-      <button class="button primary" type="submit">{{ primary_action.cta }}</button>
-    </form>
-    {% elif primary_action.code == "discarded" %}
-    <a class="button primary" href="/">{{ primary_action.cta }}</a>
-    {% elif primary_action.code == "action_required" %}
-    <a class="button primary" href="#failed-section">{{ primary_action.cta }}</a>
-    {% elif primary_action.code == "running" %}
-    <a class="button primary" href="#extension-panel">{{ primary_action.cta }}</a>
-    {% elif primary_action.code == "ready" %}
-    <a class="button primary" href="#extension-panel">{{ primary_action.cta }}</a>
-    {% elif primary_action.code == "complete" and batch_archive_ready %}
-    <a class="button primary" href="/batches/{{ batch.id }}/download.zip">{{ primary_action.cta }}</a>
-    {% elif primary_action.code == "blocked" %}
-    <a class="button primary" href="#preflight-panel">{{ primary_action.cta }}</a>
-    {% else %}
-    <a class="button primary" href="#extension-panel">{{ primary_action.cta }}</a>
+{% if not (batch.status == "precheck_ready" and can_operate) %}
+<section class="batch-settings-panel">
+  <div class="download-name-summary">
+    <span>
+      <label class="heading-with-help">
+        下载文件夹名
+        <span class="help-tip" tabindex="0" aria-label="确认导入后，插件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/。" data-tip="确认导入后，插件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/。">?</span>
+      </label>
+      <strong>{{ batch.download_name }}</strong>
+    </span>
+    {% if can_edit_download_name %}
+    <details>
+      <summary class="button subtle">修改</summary>
+      <form class="batch-download-name-form" method="post" action="/batches/{{ batch.id }}/download-name">
+        <input
+          id="precheck_download_name"
+          name="download_name"
+          type="text"
+          value="{{ batch.download_name }}"
+          maxlength="120"
+          required
+        >
+        <button class="button subtle" type="submit">保存</button>
+      </form>
+    </details>
+    {% elif batch.status == "processing" or status_counts.downloading > 0 %}
+    <span class="muted-text">下载中不可修改</span>
     {% endif %}
-    <a class="button subtle" href="#order-detail-section">查看 SKU 明细</a>
   </div>
 </section>
+{% endif %}
 
-<section class="metrics">
-  <div><span>{{ batch.order_count }}</span><label>订单</label></div>
-  <div><span>{{ batch.item_count }}</span><label>SKU 明细</label></div>
-  <div><span>{{ batch.link_count }}</span><label>下载链接</label></div>
-  <div><span>{{ batch.success_count }}</span><label>成功下载</label></div>
-  <div><span>{{ batch.failed_count }}</span><label>失败</label></div>
+{% if batch.status == "precheck_failed" %}
+<section class="notice error-block">
+  导入预检未通过。请补齐 SKU 和 Design Link 后重新上传。
+</section>
+{% elif batch.status == "discarded" %}
+<section class="notice">
+  该上传记录已删除，不进入正式订单批次和下载队列。
+</section>
+{% endif %}
+
+{% if batch.error_message %}
+<section class="notice error-block">{{ batch.error_message }}</section>
+{% endif %}
+
+{% if import_summary and (batch.status in ["uploaded", "parsing", "precheck_ready", "precheck_failed", "needs_fix"] or import_summary.warnings or import_summary.missing_required_fields or import_summary.duplicate_skus) %}
+<section class="preflight-panel" id="preflight-panel">
+  <div class="section-heading">
+    <h2 class="heading-with-help">
+      导入预检
+      <span class="help-tip" tabindex="0" aria-label="用于提前发现表格和链接风险；当前只有 SKU 和 Design Link 缺失会阻止下载。" data-tip="用于提前发现表格和链接风险；当前只有 SKU 和 Design Link 缺失会阻止下载。">?</span>
+    </h2>
+  </div>
+  <div class="summary-grid">
+    <div><span>{{ import_summary.sheet_name or "-" }}</span><label>工作表</label></div>
+    <div><span>{{ import_summary.item_count }}</span><label>SKU 行</label></div>
+    <div><span>{{ import_summary.order_count }}</span><label>订单</label></div>
+    <div><span>{{ import_summary.design_link_count }}</span><label>Design Link</label></div>
+    <div><span>{{ import_summary.mockup_link_count or 0 }}</span><label>Mockup Link</label></div>
+    <div><span>{{ import_summary.empty_design_link_count }}</span><label>空链接</label></div>
+    <div><span>{{ import_summary.non_google_drive_link_count }}</span><label>非 Drive 链接</label></div>
+    <div><span>{{ import_summary.duplicate_design_link_count }}</span><label>重复链接</label></div>
+    <div><span>{{ import_summary.multi_sku_order_count }}</span><label>多 SKU 订单</label></div>
+    <div><span>{{ import_summary.duplicate_sku_count or 0 }}</span><label>重复 SKU</label></div>
+    <div><span>{{ import_summary.tracking_no_count }}</span><label>已有单号行</label></div>
+  </div>
+  {% if import_summary.warnings %}
+  <div class="warning-list">
+    {% for warning in import_summary.warnings %}
+    <span>{{ warning }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if import_summary.missing_required_fields %}
+  <div class="warning-list">
+    {% for field, rows in import_summary.missing_required_fields.items() %}
+    <span>{{ field }} 缺失：第 {{ rows|join(', ') }} 行</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if import_summary.duplicate_skus %}
+  <div class="warning-list">
+    {% for sku, rows in import_summary.duplicate_skus.items() %}
+    <span>SKU {{ sku }} 重复：第 {{ rows|join(', ') }} 行</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+{% endif %}
+
+{% if active_tab == "download" %}
+<section class="batch-settings-panel">
+  <div class="download-name-summary">
+    <span>
+      <label class="heading-with-help">
+        下载文件夹名
+        <span class="help-tip" tabindex="0" aria-label="插件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/；批次 ZIP 下载也会使用这个文件名。" data-tip="插件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/；批次 ZIP 下载也会使用这个文件名。">?</span>
+      </label>
+      <strong>{{ batch.download_name }}</strong>
+    </span>
+  </div>
 </section>
 
 <section class="progress-panel">
@@ -182,7 +252,7 @@
 <section class="extension-panel" id="extension-panel">
   <div class="section-heading">
     <h2 class="heading-with-help">
-      插件下载
+      下载图片
       <span class="help-tip" tabindex="0" aria-label="当前使用浏览器插件下载到本机，文件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/。" data-tip="当前使用浏览器插件下载到本机，文件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/。">?</span>
     </h2>
   </div>
@@ -209,7 +279,7 @@
       data-batch-id="{{ batch.id }}"
       data-can-start="{% if can_operate and batch.status in ['confirmed', 'completed_with_errors'] and (status_counts.pending + status_counts.failed) > 0 %}true{% else %}false{% endif %}"
       {% if not can_operate or batch.status not in ["confirmed", "completed_with_errors"] or (status_counts.pending + status_counts.failed) == 0 %}disabled{% endif %}
-    >用插件下载待处理项</button>
+    >开始下载图片</button>
     <span id="extension-start-status">
       {% if not can_operate %}
         这是团队只读批次，操作需由创建人或开发者执行。
@@ -220,9 +290,9 @@
       {% elif batch.status == "processing" %}
         当前已有下载处理中，请等待完成后刷新页面。
       {% elif (status_counts.pending + status_counts.failed) == 0 %}
-        当前没有待插件处理的下载项。
+        当前没有待下载图片。
       {% else %}
-        插件会复用当前登录会话，只下载你有权限访问的批次。
+        插件会复用当前登录会话。
       {% endif %}
     </span>
   </div>
@@ -239,27 +309,9 @@
   {% if stale_recovered_count %}
   <p class="extension-note">发现 {{ stale_recovered_count }} 个上次中断的下载项，已恢复为失败，可在本页重试。</p>
   {% else %}
-  <p class="extension-note">失败或中断的下载项会留在本页，可直接重试。</p>
+  <p class="extension-note">失败或中断的图片会留在本页，可直接重试。</p>
   {% endif %}
 </section>
-
-{% if current_user.role == "developer" and can_operate %}
-<details class="fallback-panel">
-  <summary>管理员应急：服务器备用下载</summary>
-  <p>仅在插件不可用或需要应急处理时使用。服务器下载更容易遇到 Google Drive 限流，普通操作员默认不使用。</p>
-  <div class="fallback-actions">
-    <form method="post" action="/batches/{{ batch.id }}/start-download">
-      <button class="button subtle" type="submit" name="limit" value="10" {% if batch.status not in ["confirmed", "completed_with_errors"] or handled_count >= batch.link_count %}disabled{% endif %}>服务器下载 10 项</button>
-      <button class="button subtle" type="submit" name="limit" value="20" {% if batch.status not in ["confirmed", "completed_with_errors"] or handled_count >= batch.link_count %}disabled{% endif %}>服务器下载 20 项</button>
-      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.status not in ["confirmed", "completed_with_errors"] or handled_count >= batch.link_count %}disabled{% endif %}>服务器继续全部</button>
-    </form>
-    <form method="post" action="/batches/{{ batch.id }}/retry-failed">
-      <button class="button subtle" type="submit" name="limit" value="10" {% if batch.failed_count == 0 or batch.status not in ["confirmed", "completed_with_errors"] %}disabled{% endif %}>服务器重试 10 个失败项</button>
-      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.failed_count == 0 or batch.status not in ["confirmed", "completed_with_errors"] %}disabled{% endif %}>服务器重试全部失败项</button>
-    </form>
-  </div>
-</details>
-{% endif %}
 
 <script>
   (function () {
@@ -409,7 +461,7 @@
       if (serverNotice) {
         status.textContent = serverNotice;
       } else if (canStart) {
-        status.textContent = "插件" + phaseLabel + "，可开始处理本批次待处理项。";
+        status.textContent = "插件" + phaseLabel + "，可开始下载图片。";
       }
     }
 
@@ -532,110 +584,9 @@
     }, 2500);
   }());
 </script>
-
-{% if batch.status == "precheck_ready" %}
-<section class="notice">
-  预检完成。确认 SKU 和下载链接无误后，请先“确认导入”，再开始下载。
-</section>
-{% elif batch.status == "confirmed" %}
-<section class="notice">
-  已确认导入正式订单批次，可以开始下载。
-</section>
-{% elif batch.status == "precheck_failed" %}
-<section class="notice error-block">
-  导入预检未通过。请补齐 SKU 和 Design Link 后重新上传。
-</section>
-{% elif batch.status == "discarded" %}
-<section class="notice">
-  该上传记录已作废，仅保留用于追溯，不进入正式订单批次和下载队列。
-</section>
 {% endif %}
 
-{% if batch.error_message %}
-<section class="notice error-block">{{ batch.error_message }}</section>
-{% endif %}
-
-{% if current_user.role == "developer" %}
-<details class="fallback-panel danger-zone">
-  <summary>开发者危险操作</summary>
-  <p>物理删除会移除批次、订单、下载项、插件诊断记录和本地文件；删除前会写入审计记录。</p>
-  <form class="danger-form" method="post" action="/batches/{{ batch.id }}/delete">
-    <label for="delete-confirmation">确认文本</label>
-    <input
-      id="delete-confirmation"
-      name="confirmation"
-      type="text"
-      placeholder="DELETE-BATCH-{{ batch.id }}"
-      autocomplete="off"
-      {% if batch.status == "processing" or status_counts.downloading > 0 %}disabled{% endif %}
-      required
-    >
-    <label for="delete-reason">删除原因</label>
-    <input
-      id="delete-reason"
-      name="reason"
-      type="text"
-      placeholder="例如：清理本机测试批次"
-      {% if batch.status == "processing" or status_counts.downloading > 0 %}disabled{% endif %}
-    >
-    <button
-      class="button danger"
-      type="submit"
-      {% if batch.status == "processing" or status_counts.downloading > 0 %}disabled{% endif %}
-    >物理删除批次</button>
-    {% if batch.status == "processing" or status_counts.downloading > 0 %}
-    <span class="muted">批次下载中，不能删除。</span>
-    {% endif %}
-  </form>
-</details>
-{% endif %}
-
-{% if import_summary %}
-<section class="preflight-panel" id="preflight-panel">
-  <div class="section-heading">
-    <h2 class="heading-with-help">
-      导入预检
-      <span class="help-tip" tabindex="0" aria-label="用于提前发现表格和链接风险；当前只有 SKU 和 Design Link 缺失会阻止下载。" data-tip="用于提前发现表格和链接风险；当前只有 SKU 和 Design Link 缺失会阻止下载。">?</span>
-    </h2>
-  </div>
-  <div class="summary-grid">
-    <div><span>{{ import_summary.sheet_name or "-" }}</span><label>工作表</label></div>
-    <div><span>{{ import_summary.item_count }}</span><label>SKU 行</label></div>
-    <div><span>{{ import_summary.order_count }}</span><label>订单</label></div>
-    <div><span>{{ import_summary.design_link_count }}</span><label>Design Link</label></div>
-    <div><span>{{ import_summary.mockup_link_count or 0 }}</span><label>Mockup Link</label></div>
-    <div><span>{{ import_summary.empty_design_link_count }}</span><label>空链接</label></div>
-    <div><span>{{ import_summary.non_google_drive_link_count }}</span><label>非 Drive 链接</label></div>
-    <div><span>{{ import_summary.duplicate_design_link_count }}</span><label>重复链接</label></div>
-    <div><span>{{ import_summary.multi_sku_order_count }}</span><label>多 SKU 订单</label></div>
-    <div><span>{{ import_summary.duplicate_sku_count or 0 }}</span><label>重复 SKU</label></div>
-    <div><span>{{ import_summary.tracking_no_count }}</span><label>已有单号行</label></div>
-  </div>
-  {% if import_summary.warnings %}
-  <div class="warning-list">
-    {% for warning in import_summary.warnings %}
-    <span>{{ warning }}</span>
-    {% endfor %}
-  </div>
-  {% endif %}
-  {% if import_summary.missing_required_fields %}
-  <div class="warning-list">
-    {% for field, rows in import_summary.missing_required_fields.items() %}
-    <span>{{ field }} 缺失：第 {{ rows|join(', ') }} 行</span>
-    {% endfor %}
-  </div>
-  {% endif %}
-  {% if import_summary.duplicate_skus %}
-  <div class="warning-list">
-    {% for sku, rows in import_summary.duplicate_skus.items() %}
-    <span>SKU {{ sku }} 重复：第 {{ rows|join(', ') }} 行</span>
-    {% endfor %}
-  </div>
-  {% endif %}
-</section>
-{% endif %}
-
-{% if failed_rows %}
+{% if active_tab == "download" and failed_rows %}
 <section class="review-section" id="failed-section">
   <div class="section-heading">
     <h2>失败项</h2>
@@ -806,4 +757,57 @@
     });
   }());
 </script>
+
+{% if active_tab == "download" and current_user.role == "developer" and can_operate %}
+<details class="fallback-panel">
+  <summary>管理员应急：服务器备用下载</summary>
+  <p>仅在插件不可用或需要应急处理时使用。服务器下载更容易遇到 Google Drive 限流，普通操作员默认不使用。</p>
+  <div class="fallback-actions">
+    <form method="post" action="/batches/{{ batch.id }}/start-download">
+      <button class="button subtle" type="submit" name="limit" value="10" {% if batch.status not in ["confirmed", "completed_with_errors"] or handled_count >= batch.link_count %}disabled{% endif %}>服务器下载 10 项</button>
+      <button class="button subtle" type="submit" name="limit" value="20" {% if batch.status not in ["confirmed", "completed_with_errors"] or handled_count >= batch.link_count %}disabled{% endif %}>服务器下载 20 项</button>
+      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.status not in ["confirmed", "completed_with_errors"] or handled_count >= batch.link_count %}disabled{% endif %}>服务器继续全部</button>
+    </form>
+    <form method="post" action="/batches/{{ batch.id }}/retry-failed">
+      <button class="button subtle" type="submit" name="limit" value="10" {% if batch.failed_count == 0 or batch.status not in ["confirmed", "completed_with_errors"] %}disabled{% endif %}>服务器重试 10 个失败项</button>
+      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.failed_count == 0 or batch.status not in ["confirmed", "completed_with_errors"] %}disabled{% endif %}>服务器重试全部失败项</button>
+    </form>
+  </div>
+</details>
+{% endif %}
+
+{% if current_user.role == "developer" %}
+<details class="fallback-panel danger-zone">
+  <summary>开发者危险操作</summary>
+  <p>物理删除会移除批次、订单、下载项、插件诊断记录和本地文件；删除前会写入审计记录。</p>
+  <form class="danger-form" method="post" action="/batches/{{ batch.id }}/delete">
+    <label for="delete-confirmation">确认文本</label>
+    <input
+      id="delete-confirmation"
+      name="confirmation"
+      type="text"
+      placeholder="DELETE-BATCH-{{ batch.id }}"
+      autocomplete="off"
+      {% if batch.status == "processing" or status_counts.downloading > 0 %}disabled{% endif %}
+      required
+    >
+    <label for="delete-reason">删除原因</label>
+    <input
+      id="delete-reason"
+      name="reason"
+      type="text"
+      placeholder="例如：清理本机测试批次"
+      {% if batch.status == "processing" or status_counts.downloading > 0 %}disabled{% endif %}
+    >
+    <button
+      class="button danger"
+      type="submit"
+      {% if batch.status == "processing" or status_counts.downloading > 0 %}disabled{% endif %}
+    >物理删除批次</button>
+    {% if batch.status == "processing" or status_counts.downloading > 0 %}
+    <span class="muted">批次下载中，不能删除。</span>
+    {% endif %}
+  </form>
+</details>
+{% endif %}
 {% endblock %}

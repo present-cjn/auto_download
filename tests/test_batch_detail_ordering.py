@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from app.main import (
+    batch_detail_tab,
     batch_primary_action,
     batch_work_state,
     enrich_download_task_duration,
@@ -74,8 +75,8 @@ def test_batch_primary_action_for_ready_batch() -> None:
     action = batch_primary_action(batch, counts)
 
     assert action["code"] == "ready"
-    assert action["title"] == "批次已准备好"
-    assert action["cta"] == "开始下载待处理项"
+    assert action["title"] == "可以下载图片"
+    assert action["cta"] == "开始下载图片"
 
 
 def test_batch_primary_action_for_precheck_ready_batch() -> None:
@@ -91,3 +92,21 @@ def test_batch_primary_action_for_precheck_ready_batch() -> None:
     assert action["code"] == "needs_confirm"
     assert action["title"] == "上传预检已完成"
     assert action["cta"] == "确认导入"
+
+
+def test_batch_detail_tab_matches_batch_phase() -> None:
+    precheck_context = batch_detail_tab({"status": "precheck_ready"})
+    download_context = batch_detail_tab({"status": "confirmed"})
+    forced_precheck_context = batch_detail_tab({"status": "precheck_ready"}, "download")
+    discarded_context = batch_detail_tab({"status": "discarded"})
+
+    assert precheck_context == {
+        "active_tab": "precheck",
+        "can_show_download_tab": False,
+    }
+    assert download_context == {
+        "active_tab": "download",
+        "can_show_download_tab": True,
+    }
+    assert forced_precheck_context["active_tab"] == "precheck"
+    assert discarded_context["active_tab"] == "precheck"

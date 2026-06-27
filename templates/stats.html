@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}订单统计{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <h1 class="heading-with-help">
+      订单统计
+      <span class="help-tip" tabindex="0" aria-label="统计只包含已确认的正式订单批次；上传预检和作废记录不计入。" data-tip="统计只包含已确认的正式订单批次；上传预检和作废记录不计入。">?</span>
+    </h1>
+  </div>
+</section>
+
+<section class="metrics dashboard-metrics">
+  <div><span>{{ usage_totals.formal_batch_count }}</span><label>正式批次</label></div>
+  <div><span>{{ usage_totals.order_count }}</span><label>正式订单</label></div>
+  <div><span>{{ usage_totals.download_item_count }}</span><label>正式下载项</label></div>
+  <div><span>{{ usage_totals.downloaded_count }}</span><label>成功下载</label></div>
+  <div><span>{{ usage_totals.failed_count }}</span><label>失败项</label></div>
+</section>
+
+{% if usage_rows %}
+<section class="review-section">
+  <div class="section-heading">
+    <h2 class="heading-with-help">
+      {% if current_user.role in ["developer", "admin"] %}账号维度{% else %}我的统计{% endif %}
+      <span class="help-tip" tabindex="0" aria-label="统计正式批次、订单和下载处理结果。" data-tip="统计正式批次、订单和下载处理结果。">?</span>
+    </h2>
+  </div>
+  <div class="table-wrap compact">
+    <table>
+      <thead>
+        <tr>
+          <th>用户</th>
+          <th>角色</th>
+          <th>正式批次</th>
+          <th>订单</th>
+          <th>下载项</th>
+          <th>成功</th>
+          <th>手动完成</th>
+          <th>失败</th>
+          <th>待处理</th>
+          <th>处理中</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in usage_rows %}
+        <tr>
+          <td>{{ row.username }}</td>
+          <td>{{ role_labels.get(row.role, row.role) }}</td>
+          <td>{{ row.formal_batch_count }}</td>
+          <td>{{ row.order_count }}</td>
+          <td>{{ row.download_item_count }}</td>
+          <td>{{ row.downloaded_count }}</td>
+          <td>{{ row.manual_done_count }}</td>
+          <td>{{ row.failed_count }}</td>
+          <td>{{ row.pending_count }}</td>
+          <td>{{ row.processing_count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% else %}
+<section class="empty-state">
+  <h2>暂无正式订单统计</h2>
+  <p>确认导入订单批次后，统计会在这里汇总。</p>
+</section>
+{% endif %}
+
+{% if batch_duration_rows %}
+<section class="review-section">
+  <div class="section-heading">
+    <h2 class="heading-with-help">
+      批次下载用时
+      <span class="help-tip" tabindex="0" aria-label="按批次内最早开始下载到最晚完成下载计算；只统计已完成或有失败项的正式批次。" data-tip="按批次内最早开始下载到最晚完成下载计算；只统计已完成或有失败项的正式批次。">?</span>
+    </h2>
+  </div>
+  <div class="table-wrap compact">
+    <table>
+      <thead>
+        <tr>
+          <th>批次</th>
+          {% if current_user.role in ["developer", "admin"] %}<th>上传人</th>{% endif %}
+          <th>下载文件夹</th>
+          <th>完成时间</th>
+          <th>整体用时</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in batch_duration_rows %}
+        <tr>
+          <td><a class="link-action" href="/batches/{{ row.id }}?tab=download">{{ row.display_name }}</a></td>
+          {% if current_user.role in ["developer", "admin"] %}<td>{{ row.username }}</td>{% endif %}
+          <td>{{ row.download_name }}</td>
+          <td>{{ row.completed_at }}</td>
+          <td>{{ row.duration_label }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

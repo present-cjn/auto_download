@@ -997,6 +997,29 @@ def get_resource_file(
         return row_to_dict(row) if row else None
 
 
+def get_resource_file_by_category_and_version_note(
+    category: str, version_note: str, include_disabled: bool = False
+) -> Optional[dict[str, Any]]:
+    status_clause = "" if include_disabled else "AND rf.status = 'active'"
+    with connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT
+                rf.*,
+                u.username AS uploaded_by_username
+            FROM resource_files rf
+            LEFT JOIN users u ON u.id = rf.uploaded_by_user_id
+            WHERE rf.category = ?
+              AND rf.version_note = ?
+              {status_clause}
+            ORDER BY rf.id DESC
+            LIMIT 1
+            """,
+            (category, version_note),
+        ).fetchone()
+        return row_to_dict(row) if row else None
+
+
 def update_resource_file_status(resource_id: int, status: str) -> bool:
     with connect() as conn:
         cursor = conn.execute(
@@ -1008,6 +1031,19 @@ def update_resource_file_status(resource_id: int, status: str) -> bool:
             (status, resource_id),
         )
         return cursor.rowcount > 0
+
+
+def set_resource_category_active_only(category: str, active_resource_id: int) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE resource_files
+            SET status = CASE WHEN id = ? THEN 'active' ELSE 'disabled' END,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE category = ?
+            """,
+            (active_resource_id, category),
+        )
 
 
 def create_session(session_token: str, user_id: int, expires_at: str) -> None:

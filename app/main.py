@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -62,6 +64,15 @@ RESOURCE_ALLOWED_EXTENSIONS = {
     "browser_extension": {".zip"},
     "guide": {".pdf", ".docx", ".xlsx", ".zip"},
 }
+AUTO_BROWSER_EXTENSION_FILES = [
+    "manifest.json",
+    "service_worker.js",
+    "content_script.js",
+    "popup.html",
+    "popup.css",
+    "popup.js",
+]
+AUTO_BROWSER_EXTENSION_DIR = Path("browser-extension")
 
 
 STATUS_LABELS = {
@@ -99,6 +110,16 @@ WORK_STATE_LABELS = {
 
 DOWNLOAD_ALLOWED_BATCH_STATUSES = {"confirmed", "processing", "completed_with_errors"}
 DOWNLOAD_START_ALLOWED_BATCH_STATUSES = {"confirmed", "completed_with_errors"}
+PRECHECK_TAB_BATCH_STATUSES = {
+    "uploaded",
+    "parsing",
+    "precheck_ready",
+    "precheck_failed",
+    "needs_fix",
+    "discarded",
+}
+DOWNLOAD_TAB_BATCH_STATUSES = {"confirmed", "processing", "completed", "completed_with_errors"}
+COMPLETED_DOWNLOAD_DURATION_STATUSES = {"completed", "completed_with_errors"}
 
 
 def configured_extension_max_attempts() -> int:
@@ -169,6 +190,95 @@ def ensure_initial_accounts() -> None:
     create_user_if_missing(developer_username, developer_password, "developer")
     for username, password in initial_seed_admin_credentials():
         create_user_if_missing(username, password, "admin")
+
+
+def auto_resource_uploader() -> Optional[dict]:
+    developer_username, _password = initial_developer_credentials()
+    developer = db.get_user_by_username(developer_username)
+    if developer and developer["role"] == "developer":
+        return developer
+    for user in db.list_users():
+        if user["role"] == "developer" and user["status"] == "active":
+            return user
+    return None
+
+
+def browser_extension_manifest(extension_dir: Path) -> Optional[dict[str, Any]]:
+    manifest_path = extension_dir / "manifest.json"
+    if not manifest_path.exists():
+        return None
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def browser_extension_source_hash(extension_dir: Path) -> Optional[str]:
+    digest = hashlib.sha256()
+    for relative_name in AUTO_BROWSER_EXTENSION_FILES:
+        path = extension_dir / relative_name
+        if not path.exists() or not path.is_file():
+            return None
+        digest.update(relative_name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()[:12]
+
+
+def build_browser_extension_zip(extension_dir: Path, target_path: Path) -> None:
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    if target_path.exists():
+        target_path.unlink()
+    with zipfile.ZipFile(target_path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for relative_name in AUTO_BROWSER_EXTENSION_FILES:
+            archive.write(extension_dir / relative_name, arcname=relative_name)
+
+
+def publish_browser_extension_resource() -> Optional[int]:
+    extension_dir = AUTO_BROWSER_EXTENSION_DIR
+    if not extension_dir.exists() or not extension_dir.is_dir():
+        return None
+    manifest = browser_extension_manifest(extension_dir)
+    source_hash = browser_extension_source_hash(extension_dir)
+    uploader = auto_resource_uploader()
+    if not manifest or not source_hash or not uploader:
+        return None
+
+    version = str(manifest.get("version") or "0.0.0").strip() or "0.0.0"
+    filename = f"browser-extension-{version}-{source_hash}.zip"
+    version_note = f"自动发布；source_hash={source_hash}"
+    target_path = RESOURCES_DIR / "auto" / filename
+
+    existing = db.get_resource_file_by_category_and_version_note(
+        "browser_extension",
+        version_note,
+        include_disabled=True,
+    )
+    if existing:
+        storage_path = Path(existing["storage_path"] or "")
+        if not storage_path.exists() or not storage_path.is_file():
+            build_browser_extension_zip(extension_dir, target_path)
+            db.update_resource_file_storage(
+                int(existing["id"]),
+                target_path,
+                target_path.stat().st_size,
+            )
+        db.set_resource_category_active_only("browser_extension", int(existing["id"]))
+        return int(existing["id"])
+
+    build_browser_extension_zip(extension_dir, target_path)
+    resource_id = db.create_resource_file(
+        f"浏览器插件 v{version}",
+        "browser_extension",
+        filename,
+        int(uploader["id"]),
+        version_note,
+    )
+    db.update_resource_file_storage(resource_id, target_path, target_path.stat().st_size)
+    db.set_resource_category_active_only("browser_extension", resource_id)
+    return resource_id
 
 
 def current_user(request: Request) -> Optional[dict]:
@@ -321,7 +431,7 @@ def batch_work_state(batch: dict, counts: dict[str, int]) -> dict[str, str]:
         return {
             "code": "ready",
             "label": WORK_STATE_LABELS["ready"],
-            "next_action": "开始下载待处理项",
+            "next_action": "开始下载图片",
         }
     return {
         "code": "complete",
@@ -332,6 +442,7 @@ def batch_work_state(batch: dict, counts: dict[str, int]) -> dict[str, str]:
 
 def enrich_batch_work_queue(batches: list[dict]) -> list[dict]:
     priority = {
+        "needs_confirm": 1,
         "action_required": 1,
         "running": 2,
         "ready": 3,
@@ -380,11 +491,100 @@ def group_batches_for_index(batches: list[dict]) -> dict[str, list[dict]]:
     }
 
 
+def list_batches_for_scope(user: dict, scope: str = "my") -> tuple[list[dict], str]:
+    normalized_scope = scope if scope in {"my", "team"} else "my"
+    if user["role"] not in {"developer", "admin"}:
+        normalized_scope = "my"
+    if normalized_scope == "team":
+        batches = db.list_batches_for_user(user)
+    else:
+        batches = [
+            batch
+            for batch in db.list_batches_for_user(user)
+            if batch.get("created_by_user_id") == user["id"]
+        ]
+    return batches, normalized_scope
+
+
+def recent_precheck_batches_for_user(user: dict, limit: int = 3) -> list[dict]:
+    own_batches, _scope = list_batches_for_scope(user, "my")
+    batches = enrich_batch_work_queue(own_batches)
+    precheck_batches = [batch for batch in batches if batch["queue_group"] == "precheck"]
+    return sorted(precheck_batches, key=lambda batch: int(batch["id"]), reverse=True)[:limit]
+
+
 def usage_rows_for_user(user: dict) -> list[dict]:
     rows = db.list_download_usage_by_user()
     if user["role"] in {"developer", "admin"}:
         return rows
     return [row for row in rows if row.get("user_id") == user["id"]]
+
+
+def batch_detail_tab(batch: dict, requested_tab: str = "") -> dict[str, Any]:
+    can_show_download_tab = batch["status"] in DOWNLOAD_TAB_BATCH_STATUSES
+    default_tab = "download" if can_show_download_tab else "precheck"
+    active_tab = requested_tab if requested_tab in {"precheck", "download"} else default_tab
+    if active_tab == "download" and not can_show_download_tab:
+        active_tab = "precheck"
+    return {
+        "active_tab": active_tab,
+        "can_show_download_tab": can_show_download_tab,
+    }
+
+
+def batch_download_duration_rows_for_user(user: dict) -> list[dict[str, Any]]:
+    placeholders = ",".join("?" for _ in COMPLETED_DOWNLOAD_DURATION_STATUSES)
+    params: list[Any] = sorted(COMPLETED_DOWNLOAD_DURATION_STATUSES)
+    user_clause = ""
+    if user["role"] not in {"developer", "admin"}:
+        user_clause = "AND ib.created_by_user_id = ?"
+        params.append(int(user["id"]))
+    with db.connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                ib.id,
+                ib.file_name,
+                ib.download_name,
+                ib.status,
+                ib.created_at,
+                ib.business_date,
+                ib.user_daily_sequence,
+                ib.created_by_user_id,
+                COALESCE(u.username, '历史批次') AS username,
+                MIN(di.started_at) AS started_at,
+                MAX(di.completed_at) AS completed_at
+            FROM import_batches ib
+            JOIN download_items di ON di.batch_id = ib.id
+            LEFT JOIN users u ON u.id = ib.created_by_user_id
+            WHERE ib.status IN ({placeholders})
+              AND di.started_at IS NOT NULL
+              AND di.completed_at IS NOT NULL
+              {user_clause}
+            GROUP BY ib.id
+            ORDER BY completed_at DESC, ib.id DESC
+            LIMIT 50
+            """,
+            params,
+        ).fetchall()
+    duration_rows = []
+    for row in rows:
+        item = db.row_to_dict(row)
+        started_at = parse_db_timestamp(item.get("started_at"))
+        completed_at = parse_db_timestamp(item.get("completed_at"))
+        if not started_at or not completed_at:
+            continue
+        duration_seconds = int((completed_at - started_at).total_seconds())
+        if duration_seconds < 0:
+            continue
+        duration_rows.append(
+            {
+                **item,
+                "display_name": batch_display_name(item),
+                "duration_label": format_duration_seconds(duration_seconds),
+            }
+        )
+    return duration_rows
 
 
 def sort_rows_by_excel_row(rows: list[dict]) -> list[dict]:
@@ -393,6 +593,15 @@ def sort_rows_by_excel_row(rows: list[dict]) -> list[dict]:
 
 def normalized_limit(limit: int) -> Optional[int]:
     return limit if limit > 0 else None
+
+
+def cleaned_download_name(download_name: str) -> str:
+    if not download_name.strip():
+        raise HTTPException(status_code=400, detail="下载文件夹名不能为空。")
+    cleaned_name = safe_filename(download_name).strip(" .")
+    if not cleaned_name:
+        raise HTTPException(status_code=400, detail="下载文件夹名不能为空。")
+    return cleaned_name
 
 
 def current_quota_month() -> str:
@@ -548,9 +757,9 @@ def batch_primary_action(batch: dict, counts: dict[str, int]) -> dict[str, str]:
         body = "失败项已集中列在下方。可以重试失败项，或确认已人工处理后标记完成。"
         cta = "处理失败项"
     elif actions["can_start_extension"]:
-        title = "批次已准备好"
-        body = "确认 SKU 和下载链接后，开始下载待处理项。"
-        cta = "开始下载待处理项"
+        title = "可以下载图片"
+        body = "开始下载当前批次的图片。"
+        cta = "开始下载图片"
     elif work_state["code"] == "complete":
         title = "批次已完成"
         body = "当前没有待处理下载项。可以下载 ZIP 或查看明细。"
@@ -717,6 +926,7 @@ def startup() -> None:
     RESOURCES_DIR.mkdir(parents=True, exist_ok=True)
     db.init_db()
     ensure_initial_accounts()
+    publish_browser_extension_resource()
     db.delete_expired_sessions(utc_now_string())
 
 
@@ -769,18 +979,41 @@ def logout(request: Request):
 
 @app.get("/")
 def index(request: Request):
+    require_user(request)
+    return RedirectResponse("/uploads/new", status_code=303)
+
+
+@app.get("/batches")
+def batches_page(request: Request, scope: str = "my"):
     user = require_user(request)
-    batches = enrich_batch_work_queue(db.list_batches_for_user(user))
-    usage_rows = usage_rows_for_user(user)
+    raw_batches, active_scope = list_batches_for_scope(user, scope)
+    batches = enrich_batch_work_queue(raw_batches)
+    can_view_team = user["role"] in {"developer", "admin"}
     return templates.TemplateResponse(
         request=request,
-        name="index.html",
+        name="batches.html",
         context=template_context(
             user,
             batches=batches,
             batch_groups=group_batches_for_index(batches),
+            active_scope=active_scope,
+            can_view_team=can_view_team,
+        ),
+    )
+
+
+@app.get("/stats")
+def stats_page(request: Request):
+    user = require_user(request)
+    usage_rows = usage_rows_for_user(user)
+    return templates.TemplateResponse(
+        request=request,
+        name="stats.html",
+        context=template_context(
+            user,
             usage_rows=usage_rows,
             usage_totals=db.download_usage_totals(usage_rows),
+            batch_duration_rows=batch_download_duration_rows_for_user(user),
         ),
     )
 
@@ -788,6 +1021,7 @@ def index(request: Request):
 @app.get("/quota")
 def quota_page(request: Request, month: str = ""):
     user = require_user(request)
+    require_developer(user)
     quota_month = normalize_quota_month(month)
     return templates.TemplateResponse(
         request=request,
@@ -821,7 +1055,10 @@ def upload_page(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="upload.html",
-        context=template_context(user),
+        context=template_context(
+            user,
+            recent_precheck_batches=recent_precheck_batches_for_user(user),
+        ),
     )
 
 
@@ -999,7 +1236,7 @@ def reset_user_password(request: Request, user_id: int, password: str = Form("")
 
 
 @app.get("/batches/{batch_id}")
-def batch_detail(request: Request, batch_id: int):
+def batch_detail(request: Request, batch_id: int, tab: str = ""):
     user = require_user(request)
     batch = enrich_batch_identity(require_batch_access(batch_id, user))
     can_operate = can_operate_batch(user, batch)
@@ -1071,6 +1308,7 @@ def batch_detail(request: Request, batch_id: int):
         import_summary = build_import_summary(
             item for order in orders for item in order["items"]
         )
+    tab_context = batch_detail_tab(batch, tab)
     return templates.TemplateResponse(
         request=request,
         name="batch_detail.html",
@@ -1092,6 +1330,7 @@ def batch_detail(request: Request, batch_id: int):
             filter_counts=filter_counts,
             can_operate=can_operate,
             can_edit_download_name=can_edit_download_name,
+            **tab_context,
         ),
     )
 
@@ -1140,9 +1379,18 @@ def batch_status(request: Request, batch_id: int):
 
 
 @app.post("/batches/{batch_id}/confirm")
-def confirm_batch(request: Request, batch_id: int):
+def confirm_batch(
+    request: Request,
+    batch_id: int,
+    download_name: Optional[str] = Form(None),
+):
     user = require_user(request)
-    require_batch_operation(batch_id, user)
+    batch = require_batch_operation(batch_id, user)
+    if batch["status"] != "precheck_ready":
+        raise HTTPException(status_code=400, detail="只有预检完成、待确认的上传记录可以确认导入。")
+    if download_name is not None:
+        if not db.update_batch_download_name(batch_id, cleaned_download_name(download_name)):
+            raise HTTPException(status_code=404, detail="Batch not found")
     if not db.confirm_batch(batch_id):
         raise HTTPException(status_code=400, detail="只有预检完成、待确认的上传记录可以确认导入。")
     return RedirectResponse(f"/batches/{batch_id}", status_code=303)
@@ -1154,7 +1402,7 @@ def discard_batch(request: Request, batch_id: int):
     require_batch_operation(batch_id, user)
     if not db.discard_batch(batch_id):
         raise HTTPException(status_code=400, detail="当前状态不能作废。下载中或已完成批次不能作废。")
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/batches", status_code=303)
 
 
 @app.post("/batches/{batch_id}/download-name")
@@ -1167,12 +1415,7 @@ def update_batch_download_name(
     batch = require_batch_operation(batch_id, user)
     if batch["status"] == "processing" or db.batch_has_downloading_items(batch_id):
         raise HTTPException(status_code=400, detail="批次正在下载中，不能修改下载文件夹名。")
-    if not download_name.strip():
-        raise HTTPException(status_code=400, detail="下载文件夹名不能为空。")
-    cleaned_name = safe_filename(download_name).strip(" .")
-    if not cleaned_name:
-        raise HTTPException(status_code=400, detail="下载文件夹名不能为空。")
-    if not db.update_batch_download_name(batch_id, cleaned_name):
+    if not db.update_batch_download_name(batch_id, cleaned_download_name(download_name)):
         raise HTTPException(status_code=404, detail="Batch not found")
     return RedirectResponse(f"/batches/{batch_id}", status_code=303)
 

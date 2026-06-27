@@ -182,13 +182,15 @@ def test_quota_page_visibility_and_developer_update(tmp_path: Path) -> None:
             )
         assert getattr(admin_update.value, "status_code") == 403
 
-        admin_page = quota_page(FakeRequest(admin_token), month="2026-06")
-        operator_page = quota_page(FakeRequest(operator_token), month="2026-06")
+        developer_page = quota_page(FakeRequest(developer_token), month="2026-06")
+        with pytest.raises(Exception) as admin_page:
+            quota_page(FakeRequest(admin_token), month="2026-06")
+        with pytest.raises(Exception) as operator_page:
+            quota_page(FakeRequest(operator_token), month="2026-06")
 
-        assert admin_page.context["quota_totals"]["used_count"] == 1
-        assert len(admin_page.context["quota_usage_rows"]) == 2
-        assert len(operator_page.context["quota_usage_rows"]) == 1
-        assert operator_page.context["quota_usage_rows"][0]["username"] == "op"
-        assert operator_page.context["quota_usage_rows"][0]["downloaded_count"] == 1
+        assert developer_page.context["quota_totals"]["used_count"] == 1
+        assert len(developer_page.context["quota_usage_rows"]) == 2
+        assert getattr(admin_page.value, "status_code") == 403
+        assert getattr(operator_page.value, "status_code") == 403
     finally:
         db.DB_PATH = original_path

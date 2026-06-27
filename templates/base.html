@@ -21,11 +21,12 @@
             {% endif %}
           </div>
           <div class="navbar-nav app-nav">
-            <a class="nav-link" href="/">工作台</a>
+            <a class="nav-link" href="/uploads/new">上传订单</a>
+            <a class="nav-link" href="/batches">订单处理</a>
         {% if current_user and current_user.role in ["developer", "admin"] %}
-            <a class="nav-link" href="/#team-stats">统计</a>
+            <a class="nav-link" href="/stats">统计</a>
         {% endif %}
-        {% if current_user %}
+        {% if current_user and current_user.role == "developer" %}
             <a class="nav-link" href="/quota">套餐</a>
         {% endif %}
         {% if current_user and current_user.role == "developer" %}
@@ -34,7 +35,6 @@
         {% if current_user %}
             <a class="nav-link" href="/resources">资料下载</a>
         {% endif %}
-            <a class="button primary" href="/uploads/new">上传 Excel</a>
           </div>
         </div>
       </header>

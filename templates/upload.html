@@ -10,14 +10,6 @@
   </div>
 </section>
 
-<section class="workflow upload-workflow" aria-label="导入流程">
-  <div class="step active">1. 上传表格</div>
-  <div class="step">2. 预检核对</div>
-  <div class="step">3. 插件下载</div>
-  <div class="step">4. 处理失败项</div>
-  <div class="step">5. 下载 ZIP</div>
-</section>
-
 <form class="upload-panel" method="post" action="/uploads" enctype="multipart/form-data">
   <label class="heading-with-help" for="file">
     选择订单表
@@ -26,4 +18,24 @@
   <input id="file" name="file" type="file" accept=".xlsx" required>
   <button class="button primary" type="submit">上传并解析</button>
 </form>
+
+{% if recent_precheck_batches %}
+<section class="recent-upload-panel">
+  <div class="section-heading">
+    <h2>我最近待确认上传</h2>
+    <a class="button subtle" href="/batches">全部订单处理</a>
+  </div>
+  <div class="recent-upload-list">
+    {% for batch in recent_precheck_batches %}
+    <a class="recent-upload-item" href="/batches/{{ batch.id }}">
+      <span>
+        <strong>{{ batch.display_name }}</strong>
+        <small>{{ batch.file_name }}</small>
+      </span>
+      <span class="status work-{{ batch.work_state.code }}">{{ batch.work_state.label }}</span>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
 {% endblock %}
