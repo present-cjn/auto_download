@@ -1,4 +1,6 @@
 gdown==5.2.2
+curl_cffi==0.7.4
+playwright==1.48.0
 fastapi==0.124.4
 starlette==0.44.0
 uvicorn==0.33.0

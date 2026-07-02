@@ -614,7 +614,7 @@
           <td>{{ "Mockup" if task.source_type == "mockup" else "Design" }}</td>
           <td>
             {% if task.design_link %}
-            <a class="link-action" href="{{ task.design_link }}" target="_blank" rel="noopener noreferrer">打开 Drive</a>
+            <a class="link-action" href="{{ task.design_link }}" target="_blank" rel="noopener noreferrer">打开链接</a>
             {% else %}
             -
             {% endif %}
@@ -693,14 +693,14 @@
           <td>{{ item.tracking_no or "-" }}</td>
           <td>
             {% if item.design_link %}
-            <a class="link-action" href="{{ item.design_link }}" target="_blank" rel="noopener noreferrer">打开 Drive</a>
+            <a class="link-action" href="{{ item.design_link }}" target="_blank" rel="noopener noreferrer">打开链接</a>
             {% else %}
             -
             {% endif %}
           </td>
           <td>
             {% if item.mockup_link %}
-            <a class="link-action" href="{{ item.mockup_link }}" target="_blank" rel="noopener noreferrer">打开 Drive</a>
+            <a class="link-action" href="{{ item.mockup_link }}" target="_blank" rel="noopener noreferrer">打开链接</a>
             {% else %}
             -
             {% endif %}
@@ -761,18 +761,28 @@
 {% if active_tab == "download" and current_user.role == "developer" and can_operate %}
 <details class="fallback-panel">
   <summary>管理员应急：服务器备用下载</summary>
-  <p>仅在插件不可用或需要应急处理时使用。服务器下载更容易遇到 Google Drive 限流，普通操作员默认不使用。</p>
+  <p>仅在插件不可用或需要应急处理时使用。服务器下载会顺序处理剩余项；暂停会在当前项结束后生效。</p>
   <div class="fallback-actions">
-    <form method="post" action="/batches/{{ batch.id }}/start-download">
-      <button class="button subtle" type="submit" name="limit" value="10" {% if batch.status not in ["confirmed", "completed_with_errors"] or handled_count >= batch.link_count %}disabled{% endif %}>服务器下载 10 项</button>
-      <button class="button subtle" type="submit" name="limit" value="20" {% if batch.status not in ["confirmed", "completed_with_errors"] or handled_count >= batch.link_count %}disabled{% endif %}>服务器下载 20 项</button>
-      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.status not in ["confirmed", "completed_with_errors"] or handled_count >= batch.link_count %}disabled{% endif %}>服务器继续全部</button>
-    </form>
-    <form method="post" action="/batches/{{ batch.id }}/retry-failed">
-      <button class="button subtle" type="submit" name="limit" value="10" {% if batch.failed_count == 0 or batch.status not in ["confirmed", "completed_with_errors"] %}disabled{% endif %}>服务器重试 10 个失败项</button>
-      <button class="button subtle" type="submit" name="limit" value="0" {% if batch.failed_count == 0 or batch.status not in ["confirmed", "completed_with_errors"] %}disabled{% endif %}>服务器重试全部失败项</button>
-    </form>
+    {% if server_controls.is_running %}
+      <form method="post" action="/batches/{{ batch.id }}/server-download/pause">
+        <button class="button subtle" type="submit" {% if not server_controls.can_pause or server_controls.is_pausing %}disabled{% endif %}>
+          {% if server_controls.is_pausing %}正在暂停{% else %}暂停{% endif %}
+        </button>
+      </form>
+    {% else %}
+      <form method="post" action="/batches/{{ batch.id }}/start-download">
+        <button class="button subtle" type="submit" name="limit" value="0" {% if not server_controls.can_start_or_continue %}disabled{% endif %}>
+          {% if batch.status == "completed_with_errors" and status_counts.pending > 0 %}继续{% else %}开始{% endif %}
+        </button>
+      </form>
+      <form method="post" action="/batches/{{ batch.id }}/retry-failed">
+        <button class="button subtle" type="submit" name="limit" value="0" {% if not server_controls.can_retry_failed %}disabled{% endif %}>重试失败项</button>
+      </form>
+    {% endif %}
   </div>
+  {% if server_controls.is_pausing %}
+  <p class="muted">已请求暂停，当前项结束后会停止领取下一项。</p>
+  {% endif %}
 </details>
 {% endif %}
 

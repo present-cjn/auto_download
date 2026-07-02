@@ -83,28 +83,104 @@ sudo chmod 600 /opt/auto_download/.env
 ```text
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=<强密码>
+DRIVE_DOWNLOAD_BACKEND=rclone
 DRIVE_DOWNLOAD_TIMEOUT_SECONDS=900
 DRIVE_DOWNLOAD_DELAY_SECONDS=8
 DRIVE_ITEM_RETRY_BACKOFF_SECONDS=30,90
+RCLONE_DRIVE_REMOTES=gdrive
+RCLONE_LOCAL_ENCODING=Slash,LtGt,DoubleQuote,Colon,Question,Asterisk,Pipe,BackSlash,Del,Ctl,InvalidUtf8,Dot
+MAX_IMAGE_FILE_SIZE_MB=100
+MIN_FREE_DISK_SPACE_MB=1024
+PRINTERVAL_CURL_BIN=curl
+PRINTERVAL_CURL_TIMEOUT_SECONDS=30
+PRINTERVAL_PLAYWRIGHT_ENABLED=1
+PRINTERVAL_PLAYWRIGHT_HEADLESS=0
+PRINTERVAL_PLAYWRIGHT_TIMEOUT_SECONDS=120
+PRINTERVAL_PLAYWRIGHT_USER_DATA_DIR=data/browser-profiles/printerval-main
 ```
 
 首次启动时，如果数据库里还没有账号，系统会用这里的管理员账号初始化。
 下载相关配置含义：
 
+- `DRIVE_DOWNLOAD_BACKEND`：服务器备用下载后端，默认 `rclone`；临时回退旧逻辑时可设为 `gdown`。
 - `DRIVE_DOWNLOAD_TIMEOUT_SECONDS`：单个 Drive 资源最长下载时间。
 - `DRIVE_DOWNLOAD_DELAY_SECONDS`：批量下载时，每个链接之间等待的秒数，用于降低 Google 风控概率。
 - `DRIVE_ITEM_RETRY_BACKOFF_SECONDS`：遇到网络、超时、Drive 限流或权限类错误时，单个链接额外重试前的等待秒数列表。
+- `RCLONE_DRIVE_REMOTES`：rclone Google Drive remote 名称，支持逗号分隔的后备池，例如 `gdrive_a,gdrive_b`。
+- `RCLONE_TRANSFERS` / `RCLONE_CHECKERS`：rclone 并发数，正式下载默认保守设置为 `1`。
+- `RCLONE_DRIVE_PACER_MIN_SLEEP` / `RCLONE_DRIVE_PACER_BURST`：Drive API pacer 参数，默认 `500ms` 和 `5`。
+- `RCLONE_LOCAL_ENCODING`：rclone 写入本地缓存时的文件名转义规则，用于兼容 NTFS/exFAT 等不支持 `|`、`:`、`?` 的文件系统。
+- `MAX_IMAGE_FILE_SIZE_MB`：单张图片自动处理上限，默认 `100`；超过后提示人工判断或手动下载。
+- `MIN_FREE_DISK_SPACE_MB`：开始下载前要求服务器缓存盘至少保留的空间，默认 `1024`。
+- `PRINTERVAL_CURL_BIN`：系统 curl 兼容配置；Printerval 主路径优先使用 `curl_cffi` 和 `dl.printerval.com` 下载域。
+- `PRINTERVAL_CURL_TIMEOUT_SECONDS`：Printerval 单张子图单次请求超时，默认 `30` 秒；Printerval 多图整体超时会按图片数量自动放宽。
+- `PRINTERVAL_PLAYWRIGHT_ENABLED`：Printerval ZIP 接口和逐图下载都失败后，是否启用服务器浏览器兜底，默认启用。
+- `PRINTERVAL_PLAYWRIGHT_HEADLESS`：Playwright Chromium 是否无头运行。Printerval 当前对 `HEADLESS=1` 容易触发 Cloudflare 403，推荐服务器也使用 `0`，并通过 Xvfb 提供虚拟显示。
+- `PRINTERVAL_PLAYWRIGHT_TIMEOUT_SECONDS`：浏览器打开页面、点击下载和等待文件的最长时间，默认 `120` 秒。
+- `PRINTERVAL_PLAYWRIGHT_USER_DATA_DIR`：Printerval 持久化 Chromium profile 目录，Cloudflare 验证后的 cookie/session 会保存在这里。
+
+服务器下载使用服务用户自己的 rclone 配置，不把 OAuth token、client secret 写入
+Git 或数据库。建议先创建自建 Google OAuth client，然后以 `auto-download` 用户配置
+一个或多个 remote：
+
+```bash
+sudo -u auto-download rclone config
+sudo -u auto-download rclone listremotes
+sudo -u auto-download rclone about gdrive:
+```
+
+如果配置多个 Google 账号，给每个账号创建独立 remote，并写入
+`RCLONE_DRIVE_REMOTES=gdrive_a,gdrive_b,gdrive_c`。限流、网络或未知下载失败时会按
+顺序尝试后备 remote；权限不足或文件不存在不会继续消耗其他账号。
+
+Printerval 浏览器兜底依赖 Playwright Chromium。安装或升级依赖后执行：
+
+```bash
+sudo -u auto-download /opt/auto_download/.venv/bin/python -m playwright install chromium
+```
+
+如果服务器缺少 Chromium 系统依赖，按命令输出补齐系统包，或先设置
+`PRINTERVAL_PLAYWRIGHT_ENABLED=0` 只使用 ZIP 接口和逐图下载。
+
+建议用有头 Chromium 配合虚拟显示运行 Printerval 下载，而不是纯 headless。Ubuntu/Debian 可安装 Xvfb：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y xvfb
+```
+
+本地模拟无屏幕服务器时也使用同一方式：
+
+```bash
+scripts/run_printerval_local.sh
+```
+
+该脚本默认要求 `xvfb-run` 存在，并以 `PRINTERVAL_PLAYWRIGHT_HEADLESS=0` 在虚拟显示中启动服务。如果需要本地真实弹窗调试，可临时设置 `PRINTERVAL_USE_XVFB=0`。
+
+如果下载日志出现 `printerval_challenge_required`，用同一个 profile 在服务器上刷新会话：
+
+```bash
+cd /opt/auto_download
+sudo -u auto-download xvfb-run -a .venv/bin/python -m app.tools.printerval_session \
+  --url 'https://printerval.com/.../folder-design?...&is_show_product_image=0' \
+  --profile data/browser-profiles/printerval-main
+```
+
+URL 必须加引号，避免 `&` 被 shell 拆成后台任务。需要人工点击验证时，可临时接入服务器桌面/VNC 到同一个虚拟显示完成验证；本地调试也可以用 `PRINTERVAL_USE_XVFB=0 scripts/printerval_verify.sh '<url>'` 弹出真实浏览器窗口。验证通过后重试失败项即可。
 
 ## 5. systemd 服务
 
 安装服务文件：
 
 ```bash
-sudo cp /opt/auto_download/deploy/systemd/auto-download.service /etc/systemd/system/auto-download.service
+sudo cp /opt/auto_download/deploy/systemd/auto-download-xvfb.service /etc/systemd/system/auto-download.service
 sudo systemctl daemon-reload
 sudo systemctl enable auto-download
 sudo systemctl start auto-download
 ```
+
+如果确认不需要 Printerval 浏览器兜底，或只在已有桌面环境中运行，也可以改用
+`deploy/systemd/auto-download.service`。Printerval 自动下载推荐使用上面的 Xvfb 版服务。
 
 检查状态：
 

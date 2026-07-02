@@ -32,6 +32,7 @@ RATE_LIMIT_PAUSE_THRESHOLD = 2
 RATE_LIMIT_PAUSE_MESSAGE = (
     "疑似 Google Drive 限流，已自动暂停本轮下载。建议等待 30-60 分钟后分批继续。"
 )
+SERVER_DOWNLOAD_PAUSE_MESSAGE = "服务器下载已暂停，可继续。"
 DOWNLOAD_START_ALLOWED_BATCH_STATUSES = {"confirmed", "completed_with_errors"}
 
 
@@ -67,7 +68,7 @@ def sleep_between_download_items() -> None:
 
 
 def should_retry_download_failure(error_code: str) -> bool:
-    return error_code in {"drive_rate_limited_or_permission", "network_error", "download_timeout"}
+    return error_code in {"drive_rate_limited_or_permission", "drive_download_failed", "network_error", "download_timeout"}
 
 
 def ensure_data_dirs() -> None:
@@ -158,6 +159,15 @@ def create_order_archive(batch_id: int, order_id: int) -> Path:
 
 def process_one_download_item(item: dict) -> str:
     download_item_id = int(item["id"])
+    claimed_item = db.dispatch_download_item(download_item_id)
+    if not claimed_item:
+        print(
+            f"[batch {item['batch_id']}] skipped download item {download_item_id}: already claimed or not retryable",
+            flush=True,
+        )
+        return "skipped_busy"
+    item = {**item, **claimed_item}
+    db.clear_downloaded_files(download_item_id)
     batch_id = int(item["batch_id"])
     source_type = item.get("source_type") or "design"
     sku = item["item_sku"] or item["sku"] or f"row-{item['row_number']}"
@@ -165,9 +175,6 @@ def process_one_download_item(item: dict) -> str:
     max_attempts = 1 + len(backoffs)
     for attempt_index in range(max_attempts):
         if attempt_index > 0:
-            db.clear_downloaded_files(download_item_id)
-            db.mark_download_started(download_item_id)
-        elif item.get("status") != "downloading":
             db.clear_downloaded_files(download_item_id)
             db.mark_download_started(download_item_id)
         try:
@@ -218,7 +225,7 @@ def process_one_download_item(item: dict) -> str:
             )
             print(
                 f"[batch {batch_id}] failed {source_type} for {sku}: "
-                f"{failure.message} [{failure.code}] {failure.detail[:500]}",
+                f"{failure.message} [{failure.code}] {failure.detail[:1500]}",
                 flush=True,
             )
             return failure.code
@@ -237,17 +244,22 @@ def finish_download_batch(batch_id: int, error_message: Optional[str] = None) ->
     elif int(status_counts["pending"]) > 0:
         db.update_batch_status(batch_id, "confirmed", error_message)
     else:
+        db.enqueue_production_outbox_for_batch(batch_id)
         db.update_batch_status(batch_id, "completed", error_message)
+
+
+def pause_server_download_batch(batch_id: int) -> None:
+    db.clear_server_download_stop(batch_id)
+    finish_download_batch(batch_id, SERVER_DOWNLOAD_PAUSE_MESSAGE)
 
 
 def process_download_items(
     batch_id: int, failed_only: bool = False, limit: Optional[int] = None
 ) -> None:
-    batch = db.get_batch(batch_id)
-    if not batch or batch["status"] not in DOWNLOAD_START_ALLOWED_BATCH_STATUSES:
+    if not db.claim_batch_processing(batch_id):
         return
     ensure_batch_order_dir(batch_id)
-    db.update_batch_status(batch_id, "processing")
+    db.clear_server_download_stop(batch_id)
     items = (
         db.get_failed_download_items(batch_id)
         if failed_only
@@ -258,9 +270,18 @@ def process_download_items(
 
     consecutive_rate_limits = 0
     for index, item in enumerate(items):
+        if db.server_download_stop_requested(batch_id):
+            pause_server_download_batch(batch_id)
+            return
         if index > 0:
             sleep_between_download_items()
+            if db.server_download_stop_requested(batch_id):
+                pause_server_download_batch(batch_id)
+                return
         result = process_one_download_item(item)
+        if db.server_download_stop_requested(batch_id):
+            pause_server_download_batch(batch_id)
+            return
         if result == "drive_rate_limited_or_permission":
             consecutive_rate_limits += 1
             if consecutive_rate_limits >= RATE_LIMIT_PAUSE_THRESHOLD:
@@ -282,11 +303,10 @@ def process_download_item(download_item_id: int) -> None:
     if not item:
         return
     batch_id = int(item["batch_id"])
-    batch = db.get_batch(batch_id)
-    if not batch or batch["status"] not in DOWNLOAD_START_ALLOWED_BATCH_STATUSES:
+    if not db.claim_batch_processing(batch_id):
         return
     ensure_batch_order_dir(batch_id)
-    db.update_batch_status(batch_id, "processing")
+    db.clear_server_download_stop(batch_id)
     process_one_download_item(item)
     finish_download_batch(batch_id)
 

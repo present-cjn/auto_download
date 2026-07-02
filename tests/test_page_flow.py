@@ -261,6 +261,37 @@ def test_download_name_edit_lives_only_on_precheck_tab() -> None:
     assert 'action="/batches/{{ batch.id }}/download-name"' not in download_tab
 
 
+def test_server_fallback_controls_are_start_pause_continue_style() -> None:
+    template = Path("templates/batch_detail.html").read_text(encoding="utf-8")
+
+    assert "服务器下载 10 项" not in template
+    assert "服务器下载 20 项" not in template
+    assert "服务器继续全部" not in template
+    assert "服务器重试 10 个失败项" not in template
+    assert "服务器重试全部失败项" not in template
+    assert 'action="/batches/{{ batch.id }}/server-download/pause"' in template
+    assert "暂停会在当前项结束后生效" in template
+    assert "打开链接" in template
+
+
+def test_pause_server_download_sets_stop_request(tmp_path: Path) -> None:
+    original_path = with_temp_db(tmp_path / "app.db")
+    try:
+        developer_id, token = create_user_session("dev", "developer")
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"), developer_id)
+        db.insert_import_items(batch_id, [order_item()])
+        db.update_batch_status(batch_id, "processing")
+
+        response = app_main.pause_server_download(FakeRequest(token), batch_id)
+
+        assert response.status_code == 303
+        batch = db.get_batch(batch_id)
+        assert batch is not None
+        assert int(batch["server_stop_requested"]) == 1
+    finally:
+        db.DB_PATH = original_path
+
+
 def test_quota_navigation_is_developer_only_and_stats_omit_quota_hint() -> None:
     base_template = Path("templates/base.html").read_text(encoding="utf-8")
     stats_template = Path("templates/stats.html").read_text(encoding="utf-8")

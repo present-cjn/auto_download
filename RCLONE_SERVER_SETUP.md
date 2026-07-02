@@ -74,8 +74,8 @@ rclone config
 ```text
 name: gdrive
 Storage: drive
-client_id: 留空，PoC 阶段先使用 rclone 默认 client
-client_secret: 留空
+client_id: Google Cloud 自建 OAuth client id
+client_secret: Google Cloud 自建 OAuth client secret
 scope: drive.readonly
 root_folder_id: 留空
 service_account_file: 留空
@@ -87,8 +87,10 @@ Configure this as a Shared Drive (Team Drive): n
 说明：
 
 - `drive.readonly` 只允许读取元数据和下载文件，适合 PoC。
-- PoC 阶段可先留空 `client_id` / `client_secret`；正式使用建议创建自己的 Google OAuth client，避免共享 rclone 默认 client 的配额和风险。
+- 正式服务器下载默认使用自建 OAuth client，避免共享 rclone 默认 client 的配额和风险。
+- 早期 PoC 可以临时留空 `client_id` / `client_secret`，但稳定测试和上线前应改成自建 client。
 - 如果后续测试特定文件夹 ID，可以创建单独 remote 并设置 `root_folder_id`。
+- 如果需要多 Google 账号后备池，为每个账号创建独立 remote，例如 `gdrive_a`、`gdrive_b`、`gdrive_c`，应用环境变量设置为 `RCLONE_DRIVE_REMOTES=gdrive_a,gdrive_b,gdrive_c`。
 
 ## 无图形服务器授权方式
 
@@ -206,4 +208,3 @@ sudo chmod 600 /home/auto-download/.config/rclone/rclone.conf
 - 一个 gdown 失败过的 folder。
 - 一个 gdown 失败过的 mockup file。
 - 10、50、100 个文件的连续下载稳定性。
-

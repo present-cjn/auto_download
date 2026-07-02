@@ -8,6 +8,7 @@ from app.core.excel_parser import OrderItemRow
 from app.core.downloader import DriveDownloadError, DriveDownloadTimeout
 from app.core.tasks import (
     RATE_LIMIT_PAUSE_MESSAGE,
+    SERVER_DOWNLOAD_PAUSE_MESSAGE,
     configured_download_delay_seconds,
     configured_retry_backoff_seconds,
     create_order_archive,
@@ -51,6 +52,16 @@ def order_item(
         parent_item_name_local="",
         parent_item_name="",
     )
+
+
+def test_database_connection_uses_busy_timeout_and_wal(tmp_path: Path) -> None:
+    database_path = tmp_path / "app.db"
+    with db.connect(database_path) as conn:
+        busy_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+
+    assert busy_timeout == db.SQLITE_BUSY_TIMEOUT_MS
+    assert journal_mode.lower() == "wal"
 
 
 def test_download_status_and_error_fields(tmp_path: Path) -> None:
@@ -123,6 +134,65 @@ def test_duplicate_mockup_link_is_not_inserted_as_download_item(tmp_path: Path) 
         assert len(items) == 1
         assert items[0]["source_type"] == "design"
         assert items[0]["design_link"] == link
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_claim_batch_processing_is_atomic(tmp_path: Path) -> None:
+    database_path = tmp_path / "app.db"
+    original_path = db.DB_PATH
+    db.DB_PATH = database_path
+    try:
+        db.init_db(database_path)
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"))
+        db.update_batch_status(batch_id, "confirmed")
+
+        assert db.claim_batch_processing(batch_id) is True
+        assert db.claim_batch_processing(batch_id) is False
+        assert db.get_batch(batch_id)["status"] == "processing"
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_dispatch_download_item_claims_once(tmp_path: Path) -> None:
+    database_path = tmp_path / "app.db"
+    original_path = db.DB_PATH
+    db.DB_PATH = database_path
+    try:
+        db.init_db(database_path)
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"))
+        db.insert_import_items(batch_id, [order_item()])
+        item = db.get_pending_download_items(batch_id)[0]
+
+        claimed = db.dispatch_download_item(int(item["id"]))
+        duplicate = db.dispatch_download_item(int(item["id"]))
+
+        assert claimed is not None
+        assert claimed["status"] == "downloading"
+        assert duplicate is None
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_enqueue_production_outbox_for_ready_items_is_idempotent(tmp_path: Path) -> None:
+    database_path = tmp_path / "app.db"
+    original_path = db.DB_PATH
+    db.DB_PATH = database_path
+    try:
+        db.init_db(database_path)
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"))
+        db.insert_import_items(batch_id, [order_item()])
+        item = db.get_pending_download_items(batch_id)[0]
+        db.mark_download_success(int(item["id"]), 1)
+
+        assert db.enqueue_production_outbox_for_batch(batch_id) == 1
+        assert db.enqueue_production_outbox_for_batch(batch_id) == 0
+
+        with db.connect(database_path) as conn:
+            rows = conn.execute("SELECT * FROM production_outbox").fetchall()
+        assert len(rows) == 1
+        assert rows[0]["status"] == "pending_push"
+        assert rows[0]["idempotency_key"] == f"batch:{batch_id}:order:{item['order_id']}:sku:SKU-A"
     finally:
         db.DB_PATH = original_path
 
@@ -297,6 +367,132 @@ def test_download_timeout_does_not_stop_following_items(tmp_path: Path, monkeypa
         assert status_counts["failed"] == 1
         assert status_counts["downloaded"] == 1
         assert (orders_dir / str(batch_id) / "SKU-OK" / "image.jpg").exists()
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_plain_image_url_downloads_through_server_task(tmp_path: Path, monkeypatch) -> None:
+    database_path = tmp_path / "app.db"
+    orders_dir = tmp_path / "orders"
+    cache_dir = tmp_path / "cache"
+    original_path = db.DB_PATH
+    db.DB_PATH = database_path
+    monkeypatch.setattr("app.core.tasks.ORDERS_DIR", orders_dir)
+    monkeypatch.setattr("app.core.tasks.CACHE_DIR", cache_dir)
+    monkeypatch.setattr("app.core.tasks.sleep_between_download_items", lambda: None)
+    monkeypatch.setattr("app.core.tasks.configured_retry_backoff_seconds", lambda: [])
+    monkeypatch.setattr(
+        "app.core.downloader.run_download_with_timeout",
+        lambda download_func, resource_id, output_dir: download_func(resource_id, output_dir),
+    )
+
+    class FakeResponse:
+        status_code = 200
+        headers = {"Content-Type": "image/jpeg"}
+
+        def iter_content(self, chunk_size: int):
+            yield b"jpg"
+
+        def close(self) -> None:
+            pass
+
+    calls = []
+
+    def fake_get(url: str, stream: bool, timeout: int, headers: dict[str, str]):
+        calls.append((url, stream, timeout, headers))
+        return FakeResponse()
+
+    monkeypatch.setattr("app.core.downloader.requests.get", fake_get)
+    try:
+        db.init_db(database_path)
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"))
+        url = "https://cdn.example.com/products/front-view.jpg?token=abc"
+        db.insert_import_items(
+            batch_id,
+            [
+                order_item(
+                    row_number=2,
+                    sku="SKU-DIRECT",
+                    design_link=url,
+                )
+            ],
+        )
+        db.update_batch_status(batch_id, "confirmed")
+
+        process_download_items(batch_id)
+
+        item = db.get_batch_orders(batch_id)[0]["items"][0]["download_items"][0]
+        status_counts = db.get_batch_status_counts(batch_id)
+        assert calls[0][0:3] == (url, True, 180)
+        assert "Mozilla/5.0" in calls[0][3]["User-Agent"]
+        assert "Referer" not in calls[0][3]
+        assert status_counts["downloaded"] == 1
+        assert item["download_status"] == "downloaded"
+        assert item["download_image_count"] == 1
+        assert (orders_dir / str(batch_id) / "SKU-DIRECT" / "front-view.jpg").read_bytes() == b"jpg"
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_server_download_pause_stops_after_current_item_and_can_continue(tmp_path: Path, monkeypatch) -> None:
+    database_path = tmp_path / "app.db"
+    orders_dir = tmp_path / "orders"
+    cache_dir = tmp_path / "cache"
+    original_path = db.DB_PATH
+    db.DB_PATH = database_path
+    monkeypatch.setattr("app.core.tasks.ORDERS_DIR", orders_dir)
+    monkeypatch.setattr("app.core.tasks.CACHE_DIR", cache_dir)
+    monkeypatch.setattr("app.core.tasks.sleep_between_download_items", lambda: None)
+    monkeypatch.setattr("app.core.tasks.configured_retry_backoff_seconds", lambda: [])
+
+    calls = []
+
+    def fake_cached_drive_folder(url: str, cache_root: Path) -> Path:
+        calls.append(url)
+        source = cache_root / str(len(calls))
+        source.mkdir(parents=True, exist_ok=True)
+        (source / f"image-{len(calls)}.jpg").write_bytes(b"jpg")
+        if len(calls) == 1:
+            db.request_server_download_stop(batch_id)
+        return source
+
+    monkeypatch.setattr("app.core.tasks.cached_drive_folder", fake_cached_drive_folder)
+    try:
+        db.init_db(database_path)
+        batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"))
+        db.insert_import_items(
+            batch_id,
+            [
+                order_item(row_number=2, sku="SKU-1", design_link="https://drive.google.com/drive/folders/1"),
+                order_item(order_no="ORD-2", row_number=3, sku="SKU-2", design_link="https://drive.google.com/drive/folders/2"),
+            ],
+        )
+        db.update_batch_status(batch_id, "confirmed")
+
+        process_download_items(batch_id)
+
+        batch = db.get_batch(batch_id)
+        status_counts = db.get_batch_status_counts(batch_id)
+        assert calls == ["https://drive.google.com/drive/folders/1"]
+        assert batch is not None
+        assert batch["status"] == "confirmed"
+        assert batch["error_message"] == SERVER_DOWNLOAD_PAUSE_MESSAGE
+        assert int(batch["server_stop_requested"]) == 0
+        assert status_counts["downloaded"] == 1
+        assert status_counts["pending"] == 1
+
+        process_download_items(batch_id)
+
+        batch = db.get_batch(batch_id)
+        status_counts = db.get_batch_status_counts(batch_id)
+        assert calls == [
+            "https://drive.google.com/drive/folders/1",
+            "https://drive.google.com/drive/folders/2",
+        ]
+        assert batch is not None
+        assert batch["status"] == "completed"
+        assert status_counts["downloaded"] == 2
+        assert status_counts["pending"] == 0
     finally:
         db.DB_PATH = original_path
 

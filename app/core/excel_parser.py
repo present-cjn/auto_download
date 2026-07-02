@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 from zipfile import ZipFile
 import xml.etree.ElementTree as ET
 
@@ -22,6 +22,7 @@ REQUIRED_IMPORT_FIELDS = [
     "sku",
     "design_link",
 ]
+PRINTERVAL_ASSETS_BASE_URL = "https://assets.printerval.com/"
 FIELD_LABELS = {
     "order_date_raw": "日期",
     "order_no": "订单号",
@@ -248,6 +249,41 @@ def is_google_drive_url(url: str) -> bool:
     return host == "drive.google.com" or host.endswith(".drive.google.com")
 
 
+def is_http_url(url: str) -> bool:
+    return urlparse(url).scheme.lower() in {"http", "https"}
+
+
+def is_printerval_design_url(url: str) -> bool:
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    return host in {"printerval.com", "www.printerval.com"} and "/folder-design" in parsed.path
+
+
+def parse_printerval_design_image_urls(url: str) -> list[str]:
+    if not is_printerval_design_url(url):
+        return []
+
+    raw_values = parse_qs(urlparse(url).query, keep_blank_values=True).get("design_urls", [])
+    image_urls: list[str] = []
+    seen: set[str] = set()
+    for raw_value in raw_values:
+        for part in raw_value.split(","):
+            candidate = unquote(part).strip()
+            if not candidate:
+                continue
+            if candidate.startswith("//"):
+                candidate = f"https:{candidate}"
+            elif candidate.startswith("/"):
+                candidate = urljoin(PRINTERVAL_ASSETS_BASE_URL, candidate.lstrip("/"))
+            elif not is_http_url(candidate):
+                candidate = urljoin(PRINTERVAL_ASSETS_BASE_URL, candidate)
+            if not is_http_url(candidate) or candidate in seen:
+                continue
+            seen.add(candidate)
+            image_urls.append(candidate)
+    return image_urls
+
+
 def item_field(item: Any, field_name: str) -> Any:
     if isinstance(item, dict):
         return item.get(field_name, "")
@@ -387,6 +423,9 @@ def build_import_summary(items: Iterable[Any]) -> dict[str, object]:
     missing_required_fields: OrderedDict[str, list[int]] = OrderedDict()
     empty_design_link_count = 0
     non_google_drive_link_count = 0
+    printerval_link_count = 0
+    printerval_image_url_count = 0
+    printerval_unresolved_link_count = 0
     tracking_no_count = 0
 
     for item in item_list:
@@ -413,11 +452,23 @@ def build_import_summary(items: Iterable[Any]) -> dict[str, object]:
             all_links.append(design_link)
             if not is_google_drive_url(design_link):
                 non_google_drive_link_count += 1
+            if is_printerval_design_url(design_link):
+                printerval_link_count += 1
+                parsed_urls = parse_printerval_design_image_urls(design_link)
+                printerval_image_url_count += len(parsed_urls)
+                if not parsed_urls:
+                    printerval_unresolved_link_count += 1
         if mockup_link:
             mockup_links.append(mockup_link)
             all_links.append(mockup_link)
             if not is_google_drive_url(mockup_link):
                 non_google_drive_link_count += 1
+            if is_printerval_design_url(mockup_link):
+                printerval_link_count += 1
+                parsed_urls = parse_printerval_design_image_urls(mockup_link)
+                printerval_image_url_count += len(parsed_urls)
+                if not parsed_urls:
+                    printerval_unresolved_link_count += 1
 
     duplicate_design_link_count = len(design_links) - len(set(design_links))
     duplicate_all_link_count = len(all_links) - len(set(all_links))
@@ -432,7 +483,11 @@ def build_import_summary(items: Iterable[Any]) -> dict[str, object]:
     if empty_design_link_count:
         warnings.append(f"有 {empty_design_link_count} 行没有 Design Link。")
     if non_google_drive_link_count:
-        warnings.append(f"有 {non_google_drive_link_count} 个链接不是 Google Drive 链接，将按普通图片直链尝试下载。")
+        warnings.append(f"有 {non_google_drive_link_count} 个链接不是 Google Drive 链接，将按普通图片直链或 Printerval 多图链接尝试下载。")
+    if printerval_link_count:
+        warnings.append(f"有 {printerval_link_count} 个 Printerval 多图链接，已识别 {printerval_image_url_count} 个图片 URL。")
+    if printerval_unresolved_link_count:
+        warnings.append(f"有 {printerval_unresolved_link_count} 个 Printerval 链接没有解析到 design_urls 图片列表。")
     if duplicate_design_link_count:
         warnings.append(f"有 {duplicate_design_link_count} 个重复 Design Link。")
     if duplicate_all_link_count:
@@ -452,6 +507,9 @@ def build_import_summary(items: Iterable[Any]) -> dict[str, object]:
         "total_download_link_count": len(all_links),
         "empty_design_link_count": empty_design_link_count,
         "non_google_drive_link_count": non_google_drive_link_count,
+        "printerval_link_count": printerval_link_count,
+        "printerval_image_url_count": printerval_image_url_count,
+        "printerval_unresolved_link_count": printerval_unresolved_link_count,
         "duplicate_design_link_count": duplicate_design_link_count,
         "duplicate_all_link_count": duplicate_all_link_count,
         "multi_sku_order_count": multi_sku_order_count,

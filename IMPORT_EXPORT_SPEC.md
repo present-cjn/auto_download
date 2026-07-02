@@ -30,8 +30,8 @@ Excel 是外部协作格式，系统内部使用稳定的数据结构。后续�
 | 1 | 订单号 | 当前必填 | `Order.order_no` | 订单层业务键；同一订单多 SKU 时重复填写。 |
 | 2 | 日期 | 当前必填 | `Order.order_date` | 订单日期，用于批次核对和后续统计。 |
 | 3 | SKU | 当前必填 | `OrderItem.sku` | 订单明细标识；用于 SKU 文件夹、生产和物流拆分。 |
-| 4 | Design Link | 当前必填 | `Asset.source_url` | Google Drive 设计图链接，可填写文件夹或单文件图片链接。 |
-| 5 | Mockup Link | 选填 | `Asset.source_url` | Google Drive mockup 图片链接，可填写文件夹或单文件图片链接；有值时也会下载。 |
+| 4 | Design Link | 当前必填 | `Asset.source_url` | Google Drive 设计图链接、普通图片直链或 Printerval 多图链接，可填写 Drive 文件夹、Drive 单文件图片、直接打开就是图片的 HTTP/HTTPS URL，或 `printerval.com/.../folder-design?...design_urls=...`。 |
+| 5 | Mockup Link | 选填 | `Asset.source_url` | Google Drive mockup 图片链接、普通图片直链或 Printerval 多图链接；有值时也会下载。 |
 | 6 | 尺码 | 建议填写 | `OrderItem.size` | 商品规格。 |
 | 7 | 颜色 | 建议填写 | `OrderItem.color` | 商品规格。 |
 | 8 | 数量 | 建议填写 | `OrderItem.quantity` | 该 SKU 数量。 |
@@ -92,8 +92,10 @@ Excel 是外部协作格式，系统内部使用稳定的数据结构。后续�
 - 同一 `订单号` 下可以有多条 SKU 明细，系统必须完整保留，不能因为订单号重复而丢行。
 - `Design Link` 创建 design 下载任务；`Mockup Link` 有值时创建 mockup 下载任务。
 - Google Drive 链接支持文件夹格式 `/drive/folders/<id>`、`/drive/u/0/folders/<id>`，以及单文件格式 `/file/d/<id>/view`、`/open?id=<id>`、`/uc?id=<id>`。
+- 普通图片直链支持 `http://` 和 `https://` URL；链接响应必须是图片内容，HTML 页面、PDF 或 JSON 不会当作图片保存。
+- Printerval 多图链接支持 `printerval.com/.../folder-design?...design_urls=...`；系统会拆分 `design_urls` 中的全部图片路径，相对路径按 `https://assets.printerval.com/` 补齐后下载。
 - 如果 `Design Link` 和 `Mockup Link` 下载出同名图片，系统用 `(1)` 后缀保留重复文件，避免漏下载。
-- 服务器备用下载中，同一批次内相同 Google Drive 资源会复用缓存，避免重复请求 Google Drive；浏览器插件会复用 Drive 元数据，但仍需为每个 SKU 实际保存文件。
+- 服务器备用下载中，同一批次内相同 Google Drive 资源或普通图片 URL 会复用缓存，避免重复请求；浏览器插件会复用 Drive 元数据，但仍需为每个 SKU 实际保存文件。
 - 空字段默认不应覆盖已有关键业务字段，尤其是物流单号、地址、备注等需要保留历史判断的字段。
 
 ## 6. 当前下载导出

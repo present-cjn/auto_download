@@ -10,6 +10,7 @@ from app.core.excel_parser import OrderItemRow
 
 
 DB_PATH = Path("data/app.db")
+SQLITE_BUSY_TIMEOUT_MS = 30_000
 
 LEGACY_BATCH_STATUS_MAP = {
     "pending": "uploaded",
@@ -109,6 +110,24 @@ CREATE TABLE IF NOT EXISTS batch_deletion_audit (
 );
 """
 
+PRODUCTION_OUTBOX_SCHEMA = """
+CREATE TABLE IF NOT EXISTS production_outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL REFERENCES import_batches(id) ON DELETE CASCADE,
+    order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    order_no TEXT NOT NULL,
+    sku TEXT,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'pending_push'
+        CHECK(status IN ('pending_push', 'pushing', 'pushed', 'push_failed', 'manual_pushed')),
+    payload_json TEXT,
+    error_message TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 RESOURCE_FILES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS resource_files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,8 +181,10 @@ def connect(db_path: Optional[Path] = None) -> sqlite3.Connection:
     if db_path is None:
         db_path = DB_PATH
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn = sqlite3.connect(str(db_path), timeout=SQLITE_BUSY_TIMEOUT_MS / 1000, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -325,6 +346,12 @@ def ensure_schema_columns(conn: sqlite3.Connection) -> None:
             "import_batches",
             "created_by_user_id",
             "created_by_user_id INTEGER REFERENCES users(id)",
+        )
+        ensure_column(
+            conn,
+            "import_batches",
+            "server_stop_requested",
+            "server_stop_requested INTEGER NOT NULL DEFAULT 0",
         )
     if table_columns(conn, "download_items"):
         ensure_column(conn, "download_items", "error_code", "error_code TEXT")
@@ -584,6 +611,8 @@ def refresh_batch_counts_with_conn(conn: sqlite3.Connection, batch_id: int) -> N
 
 def reconcile_interrupted_batches(conn: sqlite3.Connection) -> None:
     normalize_legacy_batch_statuses(conn)
+    if "server_stop_requested" in table_columns(conn, "import_batches"):
+        conn.execute("UPDATE import_batches SET server_stop_requested = 0")
     interrupted_rows = conn.execute(
         """
         SELECT DISTINCT batch_id
@@ -705,6 +734,7 @@ def init_db(db_path: Optional[Path] = None) -> None:
         conn.executescript(SESSIONS_SCHEMA)
         conn.executescript(EXTENSION_EVENTS_SCHEMA)
         conn.executescript(BATCH_DELETION_AUDIT_SCHEMA)
+        conn.executescript(PRODUCTION_OUTBOX_SCHEMA)
         conn.executescript(
             f"""
             CREATE TABLE IF NOT EXISTS import_batches (
@@ -721,6 +751,7 @@ def init_db(db_path: Optional[Path] = None) -> None:
                 skipped_count INTEGER NOT NULL DEFAULT 0,
                 archive_path TEXT,
                 error_message TEXT,
+                server_stop_requested INTEGER NOT NULL DEFAULT 0,
                 import_summary_json TEXT,
                 created_by_user_id INTEGER REFERENCES users(id),
                 business_date TEXT,
@@ -1298,6 +1329,25 @@ def update_batch_status(
             """,
             (status, error_message, batch_id),
         )
+
+
+def claim_batch_processing(batch_id: int) -> bool:
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE import_batches
+            SET status = 'processing', error_message = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND status IN ('confirmed', 'completed_with_errors')
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM download_items
+                  WHERE batch_id = ? AND status = 'downloading'
+              )
+            """,
+            (batch_id, batch_id),
+        )
+        return cursor.rowcount > 0
 
 
 def set_batch_archive(batch_id: int, archive_path: Path) -> None:
@@ -2074,6 +2124,44 @@ def mark_download_retry_pending(
         )
 
 
+def request_server_download_stop(batch_id: int) -> bool:
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE import_batches
+            SET server_stop_requested = 1, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (batch_id,),
+        )
+        return cursor.rowcount > 0
+
+
+def clear_server_download_stop(batch_id: int) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE import_batches
+            SET server_stop_requested = 0, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (batch_id,),
+        )
+
+
+def server_download_stop_requested(batch_id: int) -> bool:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT server_stop_requested
+            FROM import_batches
+            WHERE id = ?
+            """,
+            (batch_id,),
+        ).fetchone()
+        return bool(row and int(row["server_stop_requested"] or 0))
+
+
 def reset_download_attempts(download_item_id: int) -> None:
     with connect() as conn:
         conn.execute(
@@ -2117,6 +2205,56 @@ def mark_download_manual_done(download_item_id: int) -> None:
             """,
             (download_item_id,),
         )
+
+
+def enqueue_production_outbox_for_batch(batch_id: int) -> int:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                oi.id AS order_item_id,
+                oi.order_id,
+                o.order_no,
+                oi.sku,
+                COUNT(di.id) AS download_count,
+                SUM(CASE WHEN di.status IN ('downloaded', 'manual_done') THEN 1 ELSE 0 END) AS ready_count
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            LEFT JOIN download_items di ON di.order_item_id = oi.id
+            WHERE oi.batch_id = ?
+            GROUP BY oi.id
+            HAVING download_count > 0 AND download_count = ready_count
+            """,
+            (batch_id,),
+        ).fetchall()
+        inserted = 0
+        for row in rows:
+            sku = row["sku"] or f"item-{row['order_item_id']}"
+            idempotency_key = f"batch:{batch_id}:order:{row['order_id']}:sku:{sku}"
+            payload = {
+                "batch_id": batch_id,
+                "order_id": int(row["order_id"]),
+                "order_no": row["order_no"],
+                "sku": sku,
+            }
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO production_outbox (
+                    batch_id, order_id, order_no, sku, idempotency_key, payload_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    batch_id,
+                    int(row["order_id"]),
+                    row["order_no"],
+                    sku,
+                    idempotency_key,
+                    json.dumps(payload, ensure_ascii=False),
+                ),
+            )
+            inserted += cursor.rowcount
+        return inserted
 
 
 def add_downloaded_file(

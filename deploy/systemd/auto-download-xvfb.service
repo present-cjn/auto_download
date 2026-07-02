@@ -1,0 +1,19 @@
+[Unit]
+Description=Auto Download Web Tool with Xvfb
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=auto-download
+Group=auto-download
+WorkingDirectory=/opt/auto_download
+EnvironmentFile=/opt/auto_download/.env
+ExecStart=/usr/bin/xvfb-run -a --server-args=-screen\ 0\ 1280x1024x24 /opt/auto_download/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -9,6 +9,7 @@ from app.core.excel_parser import (
     build_import_summary,
     list_worksheet_names,
     parse_order_items,
+    parse_printerval_design_image_urls,
     single_visible_worksheet_name,
 )
 
@@ -37,6 +38,13 @@ HEADERS = [
     "Các mục mẹ",
     "Parent items",
 ]
+PRINTERVAL_DESIGN_URL = (
+    "https://printerval.com/fr/folder-design?product_id=15485898&design_urls="
+    "/psd-renderer/2026-06-25/fr_15485898/front.jpg,"
+    "/psd-renderer/2026-06-25/fr_15485898/back.jpg,"
+    "https://storage.prtvstatic.com/2026/06/25/mockup.png"
+    "&is_show_product_image=0"
+)
 
 STANDARD_HEADERS = [
     "日期",
@@ -274,6 +282,31 @@ def test_parse_allows_only_sku_and_design_link_for_download_task(tmp_path: Path)
     assert items[0].design_link == "https://example.com/images/front.jpg"
     assert summary["missing_required_fields"] == {}
     assert summary["non_google_drive_link_count"] == 1
+    assert summary["can_start_download"] is True
+
+
+def test_printerval_design_url_summary_counts_parsed_images(tmp_path: Path) -> None:
+    source = tmp_path / "printerval.xlsx"
+    write_xlsx(
+        source,
+        [
+            ["SKU", "Design Link"],
+            ["SKU-A", PRINTERVAL_DESIGN_URL],
+        ],
+    )
+
+    items = parse_order_items(source)
+    summary = build_import_summary(items)
+    image_urls = parse_printerval_design_image_urls(PRINTERVAL_DESIGN_URL)
+
+    assert len(image_urls) == 3
+    assert image_urls[0] == "https://assets.printerval.com/psd-renderer/2026-06-25/fr_15485898/front.jpg"
+    assert image_urls[-1] == "https://storage.prtvstatic.com/2026/06/25/mockup.png"
+    assert summary["printerval_link_count"] == 1
+    assert summary["printerval_image_url_count"] == 3
+    assert summary["printerval_unresolved_link_count"] == 0
+    assert summary["non_google_drive_link_count"] == 1
+    assert any("Printerval" in warning for warning in summary["warnings"])
     assert summary["can_start_download"] is True
 
 

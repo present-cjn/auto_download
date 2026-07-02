@@ -733,6 +733,29 @@ def batch_download_actions(batch: dict, counts: dict[str, int]) -> dict[str, boo
     }
 
 
+def server_download_controls(batch: dict, counts: dict[str, int], handled_count: int) -> dict[str, bool]:
+    has_downloading = int(counts["downloading"]) > 0
+    is_running = batch["status"] == "processing" or has_downloading
+    can_start_or_continue = (
+        batch["status"] in DOWNLOAD_START_ALLOWED_BATCH_STATUSES
+        and int(counts["pending"]) > 0
+        and handled_count < int(batch["link_count"] or 0)
+        and not has_downloading
+    )
+    can_retry_failed = (
+        batch["status"] in DOWNLOAD_START_ALLOWED_BATCH_STATUSES
+        and int(counts["failed"]) > 0
+        and not has_downloading
+    )
+    return {
+        "is_running": is_running,
+        "can_start_or_continue": can_start_or_continue,
+        "can_pause": is_running,
+        "can_retry_failed": can_retry_failed,
+        "is_pausing": bool(int(batch.get("server_stop_requested") or 0)),
+    }
+
+
 def batch_primary_action(batch: dict, counts: dict[str, int]) -> dict[str, str]:
     work_state = batch_work_state(batch, counts)
     actions = batch_download_actions(batch, counts)
@@ -1272,6 +1295,7 @@ def batch_detail(request: Request, batch_id: int, tab: str = ""):
     status_counts = db.get_batch_status_counts(batch_id)
     handled_count = int(batch["success_count"]) + int(status_counts["manual_done"])
     primary_action = batch_primary_action(batch, status_counts)
+    server_controls = server_download_controls(batch, status_counts, handled_count)
     can_edit_download_name = (
         can_operate
         and batch["status"] != "processing"
@@ -1327,6 +1351,7 @@ def batch_detail(request: Request, batch_id: int, tab: str = ""):
             import_summary=import_summary,
             stale_recovered_count=stale_recovered_count,
             primary_action=primary_action,
+            server_controls=server_controls,
             filter_counts=filter_counts,
             can_operate=can_operate,
             can_edit_download_name=can_edit_download_name,
@@ -1662,6 +1687,7 @@ def start_batch_download(request: Request, batch_id: int, limit: int = Form(0)):
     batch = require_batch_operation(batch_id, user)
     require_download_start_allowed(batch)
     selected_limit = normalized_limit(limit)
+    db.clear_server_download_stop(batch_id)
     if selected_limit:
         start_background(start_download_limited, batch_id, selected_limit)
     else:
@@ -1675,10 +1701,20 @@ def retry_failed_items(request: Request, batch_id: int, limit: int = Form(0)):
     batch = require_batch_operation(batch_id, user)
     require_download_start_allowed(batch)
     selected_limit = normalized_limit(limit)
+    db.clear_server_download_stop(batch_id)
     if selected_limit:
         start_background(retry_failed_limited, batch_id, selected_limit)
     else:
         start_background(retry_failed, batch_id)
+    return RedirectResponse(f"/batches/{batch_id}", status_code=303)
+
+
+@app.post("/batches/{batch_id}/server-download/pause")
+def pause_server_download(request: Request, batch_id: int):
+    user = require_user(request)
+    batch = require_batch_operation(batch_id, user)
+    if batch["status"] == "processing" or db.batch_has_downloading_items(batch_id):
+        db.request_server_download_stop(batch_id)
     return RedirectResponse(f"/batches/{batch_id}", status_code=303)
 
 
