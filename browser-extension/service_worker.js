@@ -5,6 +5,16 @@ const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const IMAGE_MIME_PREFIX = "image/";
 const GOOGLE_APPS_MIME_PREFIX = "application/vnd.google-apps.";
 const GOOGLE_APPS_FOLDER_MIME = "application/vnd.google-apps.folder";
+const IMAGE_MIME_EXTENSIONS = {
+  "image/jpeg": ".jpg",
+  "image/jpg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+  "image/bmp": ".bmp",
+  "image/tiff": ".tif"
+};
+const IMAGE_EXTENSIONS = new Set(Object.values(IMAGE_MIME_EXTENSIONS).concat([".jpeg", ".tiff"]));
 const DOWNLOAD_RETRY_DELAYS_MS = [3000];
 const DOWNLOAD_WAIT_TIMEOUT_MS = 30 * 60 * 1000;
 const DOWNLOAD_POLL_INTERVAL_MS = 1000;
@@ -321,6 +331,24 @@ function directUrlFilename(url, fallback) {
   } catch (error) {
     return sanitizePathPart(fallback, "downloaded-image");
   }
+}
+
+function imageExtensionForMimeType(mimeType) {
+  return IMAGE_MIME_EXTENSIONS[String(mimeType || "").split(";")[0].trim().toLowerCase()] || "";
+}
+
+function hasImageExtension(filename) {
+  const lowerName = String(filename || "").toLowerCase();
+  return Array.from(IMAGE_EXTENSIONS).some((extension) => lowerName.endsWith(extension));
+}
+
+function imageFilenameWithExtension(filename, mimeType) {
+  const cleaned = sanitizePathPart(filename, "downloaded-image");
+  if (hasImageExtension(cleaned)) {
+    return cleaned;
+  }
+  const extension = imageExtensionForMimeType(mimeType);
+  return extension ? `${cleaned}${extension}` : cleaned;
 }
 
 function driveResourceCacheKey(task) {
@@ -1298,9 +1326,10 @@ async function downloadWithRetry({ task, file, filename, downloadOptions, prepar
 }
 
 async function downloadDriveFileByApi(file, task, token) {
+  const localName = imageFilenameWithExtension(file.name || `${file.id}.jpg`, file.mimeType);
   const filename = joinDownloadPath(
     task.sku_folder,
-    `${task.filename_prefix}${file.name || `${file.id}.jpg`}`
+    `${task.filename_prefix}${localName}`
   );
   const downloadItem = await downloadWithRetry({
     task,

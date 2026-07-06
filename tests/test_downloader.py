@@ -28,8 +28,11 @@ from app.core.downloader import (
     download_printerval_images_with_playwright_fetch,
     extract_drive_file_id,
     extract_drive_folder_id,
+    image_extension_for_file,
+    image_filename_with_extension,
     iter_image_files,
     is_google_drive_url,
+    normalize_image_file_extensions,
     next_available_path,
     parse_drive_resource,
     parse_printerval_design_image_urls,
@@ -195,6 +198,37 @@ def test_filename_and_copy_images(tmp_path: Path) -> None:
     assert (target / "image(1).jpg").read_bytes() == b"jpg"
 
 
+def test_normalize_image_file_extensions_adds_missing_suffix(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "mockup").write_bytes(b"\xff\xd8\xff\xe0jpeg")
+    (source / "preview").write_bytes(b"RIFF\x08\x00\x00\x00WEBPwebp")
+    (source / "already.png").write_bytes(b"\x89PNG\r\n\x1a\npng")
+    (source / "note").write_text("not an image")
+
+    normalize_image_file_extensions(source)
+
+    assert image_extension_for_file(source / "mockup.jpg") == ".jpg"
+    assert image_filename_with_extension("mockup", ".jpg") == "mockup.jpg"
+    assert sorted(path.name for path in iter_image_files(source)) == [
+        "already.png",
+        "mockup.jpg",
+        "preview.webp",
+    ]
+    assert (source / "note").exists()
+
+
+def test_normalize_image_file_extensions_uniquifies_conflicts(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "mockup").write_bytes(b"\xff\xd8\xff\xe0jpeg")
+    (source / "mockup.jpg").write_bytes(b"existing")
+
+    normalize_image_file_extensions(source)
+
+    assert sorted(path.name for path in iter_image_files(source)) == ["mockup(1).jpg", "mockup.jpg"]
+
+
 def test_download_drive_file_by_id_uses_output_directory(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("DRIVE_DOWNLOAD_BACKEND", "gdown")
     calls = []
@@ -268,6 +302,23 @@ def test_download_drive_file_by_id_falls_back_to_uc_url(tmp_path: Path, monkeypa
             "use_cookies": False,
         },
     ]
+
+
+def test_download_design_images_adds_extension_before_copy(tmp_path: Path, monkeypatch) -> None:
+    def fake_download_drive_resource(url: str, output_dir: Path) -> None:
+        assert url == "https://drive.google.com/file/d/file123/view?usp=drive_link"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "mockup").write_bytes(b"\xff\xd8\xff\xe0jpeg")
+
+    monkeypatch.setattr("app.core.downloader.download_drive_resource", fake_download_drive_resource)
+
+    copied = download_design_images(
+        "https://drive.google.com/file/d/file123/view?usp=drive_link",
+        tmp_path,
+    )
+
+    assert [file.file_name for file in copied] == ["mockup.jpg"]
+    assert (tmp_path / "mockup.jpg").exists()
 
 
 def test_download_drive_file_by_id_reports_attempt_details(tmp_path: Path, monkeypatch) -> None:
@@ -414,6 +465,23 @@ def test_cached_drive_folder_uses_resource_kind_prefix(tmp_path: Path, monkeypat
 
     assert cache_dir == tmp_path / "file-file123"
     assert (cache_dir / "mockup.jpg").exists()
+
+
+def test_cached_drive_file_adds_extension_to_downloaded_image(tmp_path: Path, monkeypatch) -> None:
+    def fake_run_download_with_timeout(download_func, resource_id: str, output_dir: Path, timeout_seconds=None) -> None:
+        assert resource_id == "file123"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "mockup").write_bytes(b"\xff\xd8\xff\xe0jpeg")
+
+    monkeypatch.setattr("app.core.downloader.run_download_with_timeout", fake_run_download_with_timeout)
+
+    cache_dir = cached_drive_folder(
+        "https://drive.google.com/file/d/file123/view?usp=drive_link",
+        tmp_path,
+    )
+
+    assert cache_dir == tmp_path / "file-file123"
+    assert sorted(path.name for path in iter_image_files(cache_dir)) == ["mockup.jpg"]
 
 
 def test_open_id_folder_resolves_with_rclone_folder_probe(tmp_path: Path, monkeypatch) -> None:

@@ -51,6 +51,15 @@ CONTENT_TYPE_IMAGE_EXTENSIONS = {
     "image/bmp": ".bmp",
     "image/tiff": ".tif",
 }
+IMAGE_SIGNATURE_EXTENSIONS = [
+    (b"\xff\xd8\xff", ".jpg"),
+    (b"\x89PNG\r\n\x1a\n", ".png"),
+    (b"GIF87a", ".gif"),
+    (b"GIF89a", ".gif"),
+    (b"BM", ".bmp"),
+    (b"II*\x00", ".tif"),
+    (b"MM\x00*", ".tif"),
+]
 PRINTERVAL_ASSETS_BASE_URL = "https://assets.printerval.com/"
 PRINTERVAL_DOWNLOAD_BASE_URL = "https://dl.printerval.com/"
 PRINTERVAL_IMAGE_REFERER = "https://printerval.com/"
@@ -289,6 +298,26 @@ def image_extension_for_content_type(content_type: str) -> str:
     return CONTENT_TYPE_IMAGE_EXTENSIONS.get(content_type_without_parameters(content_type), "")
 
 
+def image_extension_for_file(path: Path) -> str:
+    try:
+        header = path.read_bytes()[:16]
+    except OSError:
+        return ""
+    if header.startswith(b"RIFF") and header[8:12] == b"WEBP":
+        return ".webp"
+    for signature, extension in IMAGE_SIGNATURE_EXTENSIONS:
+        if header.startswith(signature):
+            return extension
+    return ""
+
+
+def image_filename_with_extension(filename: str, extension: str) -> str:
+    cleaned = safe_filename(filename)
+    if Path(cleaned).suffix.lower() in IMAGE_EXTENSIONS or not extension:
+        return cleaned
+    return f"{cleaned}{extension}"
+
+
 def filename_from_content_disposition(value: str) -> str:
     if not value:
         return ""
@@ -334,6 +363,17 @@ def iter_image_files(directory: Path) -> Iterable[Path]:
     for path in directory.rglob("*"):
         if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
             yield path
+
+
+def normalize_image_file_extensions(directory: Path) -> None:
+    for path in sorted(directory.rglob("*")):
+        if not path.is_file() or path.suffix.lower() in IMAGE_EXTENSIONS:
+            continue
+        extension = image_extension_for_file(path)
+        if not extension:
+            continue
+        target = next_available_path(path.parent, image_filename_with_extension(path.name, extension))
+        path.rename(target)
 
 
 def image_file_count(directory: Path) -> int:
@@ -2304,6 +2344,7 @@ def download_design_images(url: str, order_dir: Path) -> list[CopiedFile]:
             download_printerval_design_url(url, temp_dir)
         else:
             download_direct_image_url(url, temp_dir)
+        normalize_image_file_extensions(temp_dir)
         return copy_images(temp_dir, order_dir)
 
 
@@ -2401,6 +2442,7 @@ def cached_drive_folder(url: str, cache_root: Path) -> Path:
         else:
             run_download_with_timeout(download_direct_image_url, url, staging_dir)
 
+        normalize_image_file_extensions(staging_dir)
         downloaded_count = image_file_count(staging_dir)
         if expected_drive_image_count is not None:
             print(
