@@ -1415,6 +1415,24 @@ textarea {
   padding: 12px 14px;
 }
 
+.settings-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 20px;
+  padding: 18px;
+}
+
+.command-block {
+  background: #111827;
+  border-radius: 8px;
+  color: #f8fafc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  margin: 12px 0;
+  overflow-x: auto;
+  padding: 12px 14px;
+}
+
 .fallback-panel summary {
   color: var(--muted);
   cursor: pointer;

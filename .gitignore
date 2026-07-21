@@ -13,8 +13,11 @@ data/
 download_report*.csv
 failed*.csv
 *.pyc
+build/
+dist/
 rclone-test/
 rclone-results/
 .rclone-test/
 rclone.conf
+vendor/rclone/rclone.exe
 scripts/rclone_poc_cases.local.json

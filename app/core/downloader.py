@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import time
 import hashlib
+import sys
 import zipfile
 from dataclasses import dataclass
 from io import BytesIO
@@ -682,8 +683,26 @@ def drive_download_backend() -> str:
     return backend if backend in {"rclone", "gdown"} else "rclone"
 
 
+def app_runtime_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[2]
+
+
+def bundled_rclone_bin() -> Optional[Path]:
+    executable_name = "rclone.exe" if os.name == "nt" else "rclone"
+    candidate = app_runtime_root() / "vendor" / "rclone" / executable_name
+    return candidate if candidate.exists() else None
+
+
 def rclone_bin() -> str:
-    return os.getenv("RCLONE_BIN", "rclone").strip() or "rclone"
+    configured = os.getenv("RCLONE_BIN", "").strip()
+    if configured:
+        return configured
+    bundled = bundled_rclone_bin()
+    if bundled:
+        return str(bundled)
+    return "rclone"
 
 
 def printerval_curl_bin() -> str:

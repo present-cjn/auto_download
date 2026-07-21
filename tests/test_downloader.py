@@ -382,6 +382,25 @@ def test_rclone_folder_download_uses_conservative_defaults(tmp_path: Path, monke
     ]
 
 
+def test_rclone_bin_prefers_env_over_bundled(monkeypatch) -> None:
+    from app.core import downloader
+
+    monkeypatch.setenv("RCLONE_BIN", "custom-rclone")
+    monkeypatch.setattr(downloader, "bundled_rclone_bin", lambda: Path("vendor/rclone/rclone.exe"))
+
+    assert downloader.rclone_bin() == "custom-rclone"
+
+
+def test_rclone_bin_uses_bundled_when_env_is_missing(monkeypatch) -> None:
+    from app.core import downloader
+
+    bundled = Path("vendor/rclone/rclone.exe")
+    monkeypatch.delenv("RCLONE_BIN", raising=False)
+    monkeypatch.setattr(downloader, "bundled_rclone_bin", lambda: bundled)
+
+    assert downloader.rclone_bin() == str(bundled)
+
+
 def test_rclone_file_download_uses_copyid_directory_target(tmp_path: Path, monkeypatch) -> None:
     calls = []
 

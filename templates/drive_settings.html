@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Drive 设置{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <h1>Drive 设置</h1>
+    <p>本机 Google Drive 授权和下载环境检测。</p>
+  </div>
+  <div class="actions">
+    <a class="button subtle" href="/api/local/drive-health">查看 JSON</a>
+  </div>
+</section>
+
+<section class="settings-panel">
+  <div class="section-heading">
+    <h2>本机下载状态</h2>
+    {% if health.ok %}
+    <p>rclone 已可访问 Google Drive，当前电脑可以执行本地下图。</p>
+    {% else %}
+    <p>当前电脑还不能执行本机 Drive 下载，请按下方信息处理。</p>
+    {% endif %}
+  </div>
+  <div class="summary-grid">
+    <div><span>{{ health.download_backend }}</span><label>下载后端</label></div>
+    <div><span>{{ "已安装" if health.rclone_installed else "未找到" }}</span><label>rclone</label></div>
+    <div><span>{{ health.remote_name }}</span><label>Remote</label></div>
+    <div><span>{{ "已配置" if health.remote_configured else "未配置" }}</span><label>授权配置</label></div>
+    <div><span>{{ "可访问" if health.remote_accessible else "不可访问" }}</span><label>Drive 访问</label></div>
+  </div>
+  {% if health.error %}
+  <div class="notice error-block">{{ health.error }}</div>
+  {% endif %}
+</section>
+
+<section class="settings-panel">
+  <div class="section-heading">
+    <h2>首次配置</h2>
+    <p>在 Windows 电脑上安装 rclone 后，用只读权限登录能访问设计图的 Google 账号。</p>
+  </div>
+  <pre class="command-block">configure_drive.bat</pre>
+  <div class="warning-list">
+    <span>remote 名称使用 {{ health.remote_name }}。</span>
+    <span>storage 类型选择 Google Drive。</span>
+    <span>scope 选择 drive.readonly 或只读权限。</span>
+    <span>配置完成后回到本页刷新，确认 Drive 访问为可访问。</span>
+  </div>
+</section>
+{% endblock %}

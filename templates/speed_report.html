@@ -4,7 +4,7 @@
 <section class="page-header">
   <div>
     <h1>速度报告 {{ batch.display_name }}</h1>
-    <p>{{ batch.file_name }} · 基于插件诊断事件统计{% if current_user.role == "developer" %} · 内部 #{{ batch.id }}{% endif %}</p>
+    <p>{{ batch.file_name }} · 基于下载诊断事件统计{% if current_user.role == "developer" %} · 内部 #{{ batch.id }}{% endif %}</p>
   </div>
   <div class="actions">
     <a class="button subtle" href="/batches/{{ batch.id }}">返回批次</a>
@@ -13,7 +13,7 @@
 
 {% if report.event_count == 0 %}
 <section class="notice">
-  当前批次还没有插件诊断事件。请先在批次页使用插件下载，再查看速度报告。
+  当前批次还没有诊断事件。请先在批次页下载图片，再查看速度报告。
 </section>
 {% else %}
 <section class="metrics">

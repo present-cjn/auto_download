@@ -101,7 +101,7 @@
   <form class="confirm-import-form" method="post" action="/batches/{{ batch.id }}/confirm">
     <label for="confirm_download_name" class="heading-with-help">
       下载文件夹名
-      <span class="help-tip" tabindex="0" aria-label="默认来自表格文件名；插件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/。" data-tip="默认来自表格文件名；插件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/。">?</span>
+      <span class="help-tip" tabindex="0" aria-label="默认来自表格文件名；本机下载会保存到 data/orders/{{ batch.id }}/SKU/。" data-tip="默认来自表格文件名；本机下载会保存到 data/orders/{{ batch.id }}/SKU/。">?</span>
     </label>
     <input
       id="confirm_download_name"
@@ -128,7 +128,7 @@
     <span>
       <label class="heading-with-help">
         下载文件夹名
-        <span class="help-tip" tabindex="0" aria-label="确认导入后，插件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/。" data-tip="确认导入后，插件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/。">?</span>
+        <span class="help-tip" tabindex="0" aria-label="确认导入后，本机下载会保存到 data/orders/{{ batch.id }}/SKU/。" data-tip="确认导入后，本机下载会保存到 data/orders/{{ batch.id }}/SKU/。">?</span>
       </label>
       <strong>{{ batch.download_name }}</strong>
     </span>
@@ -220,7 +220,7 @@
     <span>
       <label class="heading-with-help">
         下载文件夹名
-        <span class="help-tip" tabindex="0" aria-label="插件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/；批次 ZIP 下载也会使用这个文件名。" data-tip="插件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/；批次 ZIP 下载也会使用这个文件名。">?</span>
+        <span class="help-tip" tabindex="0" aria-label="本机下载会保存到 data/orders/{{ batch.id }}/SKU/；批次 ZIP 下载会使用这个文件名。" data-tip="本机下载会保存到 data/orders/{{ batch.id }}/SKU/；批次 ZIP 下载会使用这个文件名。">?</span>
       </label>
       <strong>{{ batch.download_name }}</strong>
     </span>
@@ -249,62 +249,52 @@
   </div>
 </section>
 
-<section class="extension-panel" id="extension-panel">
+<section class="extension-panel" id="local-download-panel">
   <div class="section-heading">
     <h2 class="heading-with-help">
       下载图片
-      <span class="help-tip" tabindex="0" aria-label="当前使用浏览器插件下载到本机，文件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/。" data-tip="当前使用浏览器插件下载到本机，文件会保存到 Downloads/auto-download/{{ batch.download_name }}/SKU/。">?</span>
+      <span class="help-tip" tabindex="0" aria-label="当前使用本机 rclone 下载 Google Drive 图片，文件会保存到本机 data/orders/{{ batch.id }}/SKU/。" data-tip="当前使用本机 rclone 下载 Google Drive 图片，文件会保存到本机 data/orders/{{ batch.id }}/SKU/。">?</span>
     </h2>
   </div>
   <div class="extension-grid">
     <div><span>{{ batch.display_name }}</span><label>当前订单批次</label></div>
-    <div><span>{{ status_counts.pending + status_counts.failed }}</span><label>待插件处理</label></div>
-    <div><span>{{ status_counts.downloading }}</span><label>插件/服务器处理中</label></div>
-  </div>
-  <div class="extension-diagnostics" id="extension-diagnostics" hidden>
-    <div><span id="extension-current-sku">-</span><label>当前 SKU</label></div>
-    <div><span id="extension-current-stage">-</span><label>当前阶段</label></div>
-    <div><span id="extension-file-progress">-</span><label>文件夹进度</label></div>
-    <div><span id="extension-current-file">-</span><label>当前文件</label></div>
-    <div><span id="extension-current-bytes">-</span><label>下载大小</label></div>
-    <div><span id="extension-last-progress">-</span><label>最近进展</label></div>
+    <div><span>{{ status_counts.pending + status_counts.failed }}</span><label>待本机处理</label></div>
+    <div><span>{{ status_counts.downloading }}</span><label>本机下载中</label></div>
   </div>
   <div class="extension-copy">
-    <code>{{ request.url.scheme }}://{{ request.url.netloc }}</code>
-    <button
-      class="button primary"
-      id="extension-start"
-      type="button"
-      data-base-url="{{ request.url.scheme }}://{{ request.url.netloc }}"
-      data-batch-id="{{ batch.id }}"
-      data-can-start="{% if can_operate and batch.status in ['confirmed', 'completed_with_errors'] and (status_counts.pending + status_counts.failed) > 0 %}true{% else %}false{% endif %}"
-      {% if not can_operate or batch.status not in ["confirmed", "completed_with_errors"] or (status_counts.pending + status_counts.failed) == 0 %}disabled{% endif %}
-    >开始下载图片</button>
+    <form method="post" action="/batches/{{ batch.id }}/start-download">
+      <button
+        class="button primary"
+        type="submit"
+        {% if not can_operate or not server_controls.can_start_or_continue %}disabled{% endif %}
+      >开始本机下载</button>
+    </form>
     <span id="extension-start-status">
       {% if not can_operate %}
         这是团队只读批次，操作需由创建人或开发者执行。
       {% elif batch.status == "precheck_ready" %}
-        请先确认导入正式订单批次，再启动插件。
+        请先确认导入正式订单批次，再开始本机下载。
       {% elif batch.status in ["precheck_failed", "discarded", "uploaded", "parsing"] %}
-        当前批次尚未确认导入，不能启动插件。
+        当前批次尚未确认导入，不能开始下载。
       {% elif batch.status == "processing" %}
         当前已有下载处理中，请等待完成后刷新页面。
       {% elif (status_counts.pending + status_counts.failed) == 0 %}
         当前没有待下载图片。
       {% else %}
-        插件会复用当前登录会话。
+        下载前请确认 <a href="/settings/drive">Drive 设置</a> 可访问。
       {% endif %}
     </span>
   </div>
   <div class="extension-copy">
-    <button
-      class="button danger"
-      id="extension-stop"
-      type="button"
-      {% if not can_operate or (batch.status != "processing" and status_counts.downloading == 0) %}disabled{% endif %}
-    >停止插件下载</button>
-    <button class="button subtle" id="extension-refresh" type="button">刷新状态</button>
-    <span id="extension-stop-status">停止后，当前项会标记失败；请在本页重试失败项。</span>
+    <form method="post" action="/batches/{{ batch.id }}/server-download/pause">
+      <button
+        class="button danger"
+        type="submit"
+        {% if not can_operate or not server_controls.can_pause %}disabled{% endif %}
+      >暂停本机下载</button>
+    </form>
+    <a class="button subtle" href="/batches/{{ batch.id }}?tab=download">刷新状态</a>
+    <span id="extension-stop-status">暂停后，本轮会在当前项结束后停止；失败项可在本页重试。</span>
   </div>
   {% if stale_recovered_count %}
   <p class="extension-note">发现 {{ stale_recovered_count }} 个上次中断的下载项，已恢复为失败，可在本页重试。</p>
@@ -312,278 +302,6 @@
   <p class="extension-note">失败或中断的图片会留在本页，可直接重试。</p>
   {% endif %}
 </section>
-
-<script>
-  (function () {
-    var button = document.getElementById("extension-start");
-    var stopButton = document.getElementById("extension-stop");
-    var refreshButton = document.getElementById("extension-refresh");
-    var status = document.getElementById("extension-start-status");
-    var stopStatus = document.getElementById("extension-stop-status");
-    var diagnosticPanel = document.getElementById("extension-diagnostics");
-    var diagnosticSku = document.getElementById("extension-current-sku");
-    var diagnosticStage = document.getElementById("extension-current-stage");
-    var diagnosticFileProgress = document.getElementById("extension-file-progress");
-    var diagnosticCurrentFile = document.getElementById("extension-current-file");
-    var diagnosticBytes = document.getElementById("extension-current-bytes");
-    var diagnosticLastProgress = document.getElementById("extension-last-progress");
-    if (!button || !stopButton || !refreshButton || !status || !stopStatus) {
-      return;
-    }
-    var canStart = button.dataset.canStart === "true";
-    var pageBatchId = String(button.dataset.batchId || "");
-    var serverNotice = "";
-    var phaseLabels = {
-      idle: "空闲",
-      ready: "就绪",
-      running: "运行中",
-      stopping: "正在停止",
-      stopped: "已停止",
-      completed: "已完成",
-      failed: "错误",
-      disconnected: "未连接"
-    };
-    var startablePhases = {
-      idle: true,
-      ready: true,
-      stopped: true,
-      completed: true,
-      failed: true
-    };
-
-    function formatBytes(value) {
-      var bytes = Number(value || 0);
-      if (!bytes) {
-        return "0 B";
-      }
-      var units = ["B", "KB", "MB", "GB"];
-      var unitIndex = 0;
-      var size = bytes;
-      while (size >= 1024 && unitIndex < units.length - 1) {
-        size = size / 1024;
-        unitIndex += 1;
-      }
-      return size.toFixed(unitIndex ? 1 : 0) + " " + units[unitIndex];
-    }
-
-    function formatTime(value) {
-      if (!value) {
-        return "-";
-      }
-      var date = new Date(value);
-      if (Number.isNaN(date.getTime())) {
-        return String(value);
-      }
-      return date.toLocaleString();
-    }
-
-    function applyDiagnostics(snapshot) {
-      snapshot = snapshot || {};
-      var task = snapshot.currentTask || {};
-      var hasDiagnostics = Boolean(task.sku || snapshot.currentStage || snapshot.currentFileName || snapshot.lastProgressAt);
-      diagnosticPanel.hidden = !hasDiagnostics;
-      diagnosticSku.textContent = task.sku
-        ? task.sku + (task.sourceTypeLabel ? " · " + task.sourceTypeLabel : "")
-        : "-";
-      diagnosticStage.textContent = snapshot.currentStage || "-";
-      diagnosticFileProgress.textContent = snapshot.currentFileTotal
-        ? String(snapshot.currentFileIndex || 0) + "/" + String(snapshot.currentFileTotal)
-        : "-";
-      diagnosticCurrentFile.textContent = snapshot.currentFileName || "-";
-      diagnosticBytes.textContent = snapshot.currentFileSize
-        ? formatBytes(snapshot.currentBytesReceived) + " / " + formatBytes(snapshot.currentFileSize)
-        : formatBytes(snapshot.currentBytesReceived);
-      diagnosticLastProgress.textContent = formatTime(snapshot.lastProgressAt);
-    }
-
-    function runtimeStateFromEvent(eventData) {
-      var response = eventData && eventData.response ? eventData.response : {};
-      return eventData.snapshot || response.snapshot || (response.state && response.state.snapshot) || response.state || {};
-    }
-
-    function runtimeErrorFromEvent(eventData, fallback) {
-      var response = eventData && eventData.response ? eventData.response : {};
-      return response.message || response.error || eventData.error || fallback;
-    }
-
-    function batchRelation(snapshot) {
-      if (snapshot && snapshot.batchRelation) {
-        return snapshot.batchRelation;
-      }
-      var runtimeBatchId = snapshot && snapshot.batchId ? String(snapshot.batchId) : "";
-      if (!runtimeBatchId) {
-        return "none";
-      }
-      return runtimeBatchId === pageBatchId ? "same" : "other";
-    }
-
-    function applyRuntimeState(snapshot) {
-      snapshot = snapshot || {};
-      var phase = snapshot.phase || (snapshot.stopping ? "stopping" : (snapshot.running ? "running" : "ready"));
-      var relation = batchRelation(snapshot);
-      var runtimeBatchId = snapshot.batchId ? String(snapshot.batchId) : "";
-      var sameBatch = relation === "same";
-      var phaseLabel = phaseLabels[phase] || phase;
-      applyDiagnostics(snapshot);
-
-      if (phase === "disconnected") {
-        button.disabled = true;
-        stopButton.disabled = true;
-        status.textContent = "未检测到插件响应，请确认已安装并启用浏览器插件。";
-        stopStatus.textContent = "插件未连接，无法发送停止请求。";
-        return;
-      }
-
-      if (phase === "stopping") {
-        button.disabled = true;
-        stopButton.disabled = true;
-        status.textContent = sameBatch
-          ? "插件正在停止本批次下载，请稍后刷新页面后重试失败项。"
-          : "插件正在停止批次 " + (runtimeBatchId || "-") + "，请稍后再启动。";
-        stopStatus.textContent = "正在停止插件下载，当前项会标记失败。";
-        return;
-      }
-
-      if (phase === "running") {
-        button.disabled = true;
-        stopButton.disabled = !sameBatch;
-        status.textContent = sameBatch
-          ? "插件正在下载本批次，请不要重复启动。"
-          : "插件正在处理批次 " + (runtimeBatchId || "-") + "，请等待完成后再启动本批次。";
-        stopStatus.textContent = sameBatch
-          ? "停止后，当前项会标记失败；请在本页重试失败项。"
-          : "当前页面不能停止其他批次的插件下载。";
-        return;
-      }
-
-      button.disabled = !(canStart && startablePhases[phase]);
-      stopButton.disabled = true;
-      if (serverNotice) {
-        status.textContent = serverNotice;
-      } else if (canStart) {
-        status.textContent = "插件" + phaseLabel + "，可开始下载图片。";
-      }
-    }
-
-    function markDisconnected(message) {
-      applyRuntimeState({ phase: "disconnected", message: message || "" });
-    }
-
-    function requestExtensionStatus() {
-      window.postMessage({
-        type: "autoDownloadExtensionStatus",
-        batchId: pageBatchId
-      }, window.location.origin);
-    }
-
-    function refreshServerStatus() {
-      return fetch("/batches/" + encodeURIComponent(pageBatchId) + "/status", {
-        credentials: "same-origin"
-      })
-        .then(function (response) {
-          if (!response.ok) {
-            throw new Error("状态接口 " + response.status);
-          }
-          return response.json();
-        })
-        .then(function (payload) {
-          var actions = payload.actions || {};
-          var counts = payload.status_counts || {};
-          canStart = Boolean(actions.can_start_extension);
-          button.dataset.canStart = canStart ? "true" : "false";
-          if (payload.stale_recovered_count) {
-            serverNotice = "发现 " + payload.stale_recovered_count + " 个上次中断的下载项，已恢复为失败，可重试。";
-            status.textContent = serverNotice;
-          } else if (!canStart && Number(counts.pending || 0) + Number(counts.failed || 0) === 0) {
-            serverNotice = "当前没有待插件处理的下载项。";
-            status.textContent = serverNotice;
-          } else {
-            serverNotice = "";
-          }
-          return payload;
-        });
-    }
-
-    window.addEventListener("message", function (event) {
-      if (event.source !== window || !event.data || event.data.type !== "autoDownloadExtensionAck") {
-        return;
-      }
-      var response = event.data.response || {};
-      var responseOk = Boolean(event.data.ok && response.ok !== false);
-      if (event.data.action === "stop") {
-        if (responseOk) {
-          applyRuntimeState(runtimeStateFromEvent(event.data));
-          stopStatus.textContent = "已通知插件停止，当前项会标记失败；请稍后刷新页面后重试失败项。";
-        } else {
-          stopButton.disabled = false;
-          stopStatus.textContent = "插件停止失败：" + runtimeErrorFromEvent(event.data, "未知错误");
-        }
-      } else if (event.data.action === "start") {
-        if (responseOk) {
-          applyRuntimeState(runtimeStateFromEvent(event.data));
-          status.textContent = "已发送到插件，插件会在后台下载并更新本页状态。";
-        } else {
-          applyRuntimeState(runtimeStateFromEvent(event.data));
-          status.textContent = runtimeErrorFromEvent(event.data, "插件启动失败。");
-        }
-      } else if (event.data.action === "status" && responseOk) {
-        applyRuntimeState(runtimeStateFromEvent(event.data));
-      } else if (event.data.action === "status") {
-        markDisconnected(runtimeErrorFromEvent(event.data, "插件未响应。"));
-      }
-    });
-
-    button.addEventListener("click", function () {
-      button.disabled = true;
-      status.textContent = "正在唤起插件...";
-      window.postMessage({
-        type: "autoDownloadExtensionStart",
-        baseUrl: button.dataset.baseUrl,
-        batchId: button.dataset.batchId
-      }, window.location.origin);
-      window.setTimeout(function () {
-        if (status.textContent === "正在唤起插件...") {
-          markDisconnected();
-        }
-      }, 2500);
-    });
-
-    stopButton.addEventListener("click", function () {
-      stopButton.disabled = true;
-      stopStatus.textContent = "正在通知插件停止...";
-      window.postMessage({
-        type: "autoDownloadExtensionStop"
-      }, window.location.origin);
-      window.setTimeout(function () {
-        if (stopStatus.textContent === "正在通知插件停止...") {
-          markDisconnected();
-        }
-      }, 2500);
-    });
-
-    refreshButton.addEventListener("click", function () {
-      refreshButton.disabled = true;
-      status.textContent = "正在刷新状态...";
-      refreshServerStatus()
-        .catch(function (error) {
-          status.textContent = "刷新服务端状态失败：" + String(error && error.message ? error.message : error);
-        })
-        .finally(function () {
-          refreshButton.disabled = false;
-          requestExtensionStatus();
-        });
-    });
-
-    button.disabled = true;
-    status.textContent = "正在检测插件状态...";
-    refreshServerStatus().finally(requestExtensionStatus);
-    window.setTimeout(function () {
-      if (status.textContent === "正在检测插件状态...") {
-        markDisconnected();
-      }
-    }, 2500);
-  }());
-</script>
 {% endif %}
 
 {% if active_tab == "download" and failed_rows %}
@@ -760,8 +478,8 @@
 
 {% if active_tab == "download" and current_user.role == "developer" and can_operate %}
 <details class="fallback-panel">
-  <summary>管理员应急：服务器备用下载</summary>
-  <p>仅在插件不可用或需要应急处理时使用。服务器下载会顺序处理剩余项；暂停会在当前项结束后生效。</p>
+  <summary>开发者高级：本机下载控制</summary>
+  <p>用于批量继续或重试失败项。本机下载会顺序处理剩余项；暂停会在当前项结束后生效。</p>
   <div class="fallback-actions">
     {% if server_controls.is_running %}
       <form method="post" action="/batches/{{ batch.id }}/server-download/pause">

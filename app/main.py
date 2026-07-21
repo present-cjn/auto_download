@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
+import subprocess
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +18,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.core import database as db
 from app.core.downloader import ERROR_LABELS, parse_drive_resource, safe_filename
+from app.core.downloader import drive_download_backend, rclone_bin, rclone_drive_remotes
 from app.core.excel_parser import build_import_summary
 from app.core.security import (
     hash_password,
@@ -723,6 +726,7 @@ def batch_download_actions(batch: dict, counts: dict[str, int]) -> dict[str, boo
         and not has_downloading
     )
     return {
+        "can_start_local_download": can_start,
         "can_start_extension": can_start,
         "can_retry_failed": (
             batch["status"] in DOWNLOAD_START_ALLOWED_BATCH_STATUSES
@@ -756,6 +760,77 @@ def server_download_controls(batch: dict, counts: dict[str, int], handled_count:
     }
 
 
+def local_drive_health(timeout_seconds: int = 15) -> dict[str, Any]:
+    backend = drive_download_backend()
+    configured_bin = rclone_bin()
+    configured_path = Path(configured_bin)
+    resolved_bin = (
+        str(configured_path)
+        if configured_path.exists()
+        else shutil.which(configured_bin)
+    )
+    remotes = rclone_drive_remotes()
+    primary_remote = remotes[0] if remotes else "gdrive"
+    health: dict[str, Any] = {
+        "download_backend": backend,
+        "rclone_bin": configured_bin,
+        "rclone_path": resolved_bin or "",
+        "rclone_installed": bool(resolved_bin),
+        "remote_name": primary_remote,
+        "remote_configured": False,
+        "remote_accessible": False,
+        "ok": False,
+        "error": "",
+    }
+    if backend != "rclone":
+        health["error"] = "当前下载后端不是 rclone。"
+        return health
+    if not resolved_bin:
+        health["error"] = f"未找到 rclone 程序：{configured_bin}"
+        return health
+
+    try:
+        remotes_result = subprocess.run(
+            [resolved_bin, "listremotes"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        health["error"] = f"无法读取 rclone remote：{exc}"
+        return health
+
+    configured_remotes = {
+        line.strip().rstrip(":")
+        for line in remotes_result.stdout.splitlines()
+        if line.strip()
+    }
+    health["remote_configured"] = primary_remote in configured_remotes
+    if not health["remote_configured"]:
+        stderr = remotes_result.stderr.strip()
+        health["error"] = stderr or f"rclone remote `{primary_remote}` 尚未配置。"
+        return health
+
+    try:
+        about_result = subprocess.run(
+            [resolved_bin, "about", f"{primary_remote}:"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        health["error"] = f"无法检测 Drive 授权：{exc}"
+        return health
+
+    health["remote_accessible"] = about_result.returncode == 0
+    health["ok"] = bool(health["remote_accessible"])
+    if not health["ok"]:
+        health["error"] = about_result.stderr.strip() or about_result.stdout.strip() or "Drive 授权检测失败。"
+    return health
+
+
 def batch_primary_action(batch: dict, counts: dict[str, int]) -> dict[str, str]:
     work_state = batch_work_state(batch, counts)
     actions = batch_download_actions(batch, counts)
@@ -773,13 +848,13 @@ def batch_primary_action(batch: dict, counts: dict[str, int]) -> dict[str, str]:
         cta = "查看预检问题"
     elif work_state["code"] == "running":
         title = "正在下载素材"
-        body = "插件正在处理当前批次。下载中可停止本批次，其他处理动作会暂时禁用。"
+        body = "本机正在处理当前批次。下载中可暂停本轮任务，其他处理动作会暂时禁用。"
         cta = "查看当前下载"
     elif actions["can_retry_failed"]:
         title = "有失败项需要处理"
         body = "失败项已集中列在下方。可以重试失败项，或确认已人工处理后标记完成。"
         cta = "处理失败项"
-    elif actions["can_start_extension"]:
+    elif actions["can_start_local_download"]:
         title = "可以下载图片"
         body = "开始下载当前批次的图片。"
         cta = "开始下载图片"
@@ -1054,6 +1129,23 @@ def quota_page(request: Request, month: str = ""):
             **monthly_quota_context(user, quota_month),
         ),
     )
+
+
+@app.get("/settings/drive")
+def drive_settings_page(request: Request):
+    user = require_user(request)
+    health = local_drive_health()
+    return templates.TemplateResponse(
+        request=request,
+        name="drive_settings.html",
+        context=template_context(user, health=health),
+    )
+
+
+@app.get("/api/local/drive-health")
+def local_drive_health_api(request: Request):
+    require_user(request)
+    return local_drive_health()
 
 
 @app.post("/quota")
@@ -1686,6 +1778,12 @@ def start_batch_download(request: Request, batch_id: int, limit: int = Form(0)):
     user = require_user(request)
     batch = require_batch_operation(batch_id, user)
     require_download_start_allowed(batch)
+    health = local_drive_health()
+    if not health["ok"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"本机 Drive 下载环境不可用：{health.get('error') or '请先完成 Drive 设置。'}",
+        )
     selected_limit = normalized_limit(limit)
     db.clear_server_download_stop(batch_id)
     if selected_limit:

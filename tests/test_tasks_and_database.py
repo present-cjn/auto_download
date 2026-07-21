@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -183,6 +184,15 @@ def test_enqueue_production_outbox_for_ready_items_is_idempotent(tmp_path: Path)
         batch_id = db.create_batch("orders.xlsx", Path("source.xlsx"))
         db.insert_import_items(batch_id, [order_item()])
         item = db.get_pending_download_items(batch_id)[0]
+        db.add_downloaded_file(
+            download_item_id=int(item["id"]),
+            batch_id=batch_id,
+            order_id=int(item["order_id"]),
+            order_no=item["order_no"],
+            file_name="design.jpg",
+            local_path=Path("data/orders/1/SKU-A/design.jpg"),
+            file_size=123,
+        )
         db.mark_download_success(int(item["id"]), 1)
 
         assert db.enqueue_production_outbox_for_batch(batch_id) == 1
@@ -193,6 +203,16 @@ def test_enqueue_production_outbox_for_ready_items_is_idempotent(tmp_path: Path)
         assert len(rows) == 1
         assert rows[0]["status"] == "pending_push"
         assert rows[0]["idempotency_key"] == f"batch:{batch_id}:order:{item['order_id']}:sku:SKU-A"
+        payload = json.loads(rows[0]["payload_json"])
+        assert payload["files"] == [
+            {
+                "file_name": "design.jpg",
+                "local_path": "data/orders/1/SKU-A/design.jpg",
+                "file_size": 123,
+                "source_type": "design",
+            }
+        ]
+        assert payload["idempotency_key"] == rows[0]["idempotency_key"]
     finally:
         db.DB_PATH = original_path
 

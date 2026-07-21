@@ -362,6 +362,7 @@ def test_batch_status_returns_actions_and_current_task(tmp_path: Path) -> None:
         assert payload["current_task"]["download_item_id"] == design_id
         assert payload["current_task"]["sku"] == "SKU-A"
         assert payload["actions"] == {
+            "can_start_local_download": False,
             "can_start_extension": False,
             "can_retry_failed": False,
             "can_refresh": True,

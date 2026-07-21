@@ -2231,11 +2231,46 @@ def enqueue_production_outbox_for_batch(batch_id: int) -> int:
         for row in rows:
             sku = row["sku"] or f"item-{row['order_item_id']}"
             idempotency_key = f"batch:{batch_id}:order:{row['order_id']}:sku:{sku}"
+            file_rows = conn.execute(
+                """
+                SELECT
+                    df.file_name,
+                    df.local_path,
+                    df.file_size,
+                    di.source_type,
+                    di.completed_at
+                FROM downloaded_files df
+                JOIN download_items di ON di.id = df.download_item_id
+                WHERE df.batch_id = ? AND di.order_item_id = ?
+                ORDER BY di.source_type, df.file_name
+                """,
+                (batch_id, int(row["order_item_id"])),
+            ).fetchall()
+            files = [
+                {
+                    "file_name": file_row["file_name"],
+                    "local_path": file_row["local_path"],
+                    "file_size": int(file_row["file_size"] or 0),
+                    "source_type": file_row["source_type"] or "design",
+                }
+                for file_row in file_rows
+            ]
+            completed_at = max(
+                [
+                    str(file_row["completed_at"])
+                    for file_row in file_rows
+                    if file_row["completed_at"]
+                ],
+                default="",
+            )
             payload = {
                 "batch_id": batch_id,
                 "order_id": int(row["order_id"]),
                 "order_no": row["order_no"],
                 "sku": sku,
+                "files": files,
+                "download_completed_at": completed_at,
+                "idempotency_key": idempotency_key,
             }
             cursor = conn.execute(
                 """
