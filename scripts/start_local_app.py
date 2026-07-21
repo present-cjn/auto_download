@@ -47,8 +47,9 @@ def run_packaged_server(host: str, port: int, env: dict[str, str]) -> int:
     os.environ.update(env)
     os.chdir(ROOT)
     import uvicorn
+    from app.main import app as fastapi_app
 
-    config = uvicorn.Config("app.main:app", host=host, port=port, log_level="info")
+    config = uvicorn.Config(fastapi_app, host=host, port=port, log_level="info")
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
