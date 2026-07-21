@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_submodules
+
 
 block_cipher = None
 datas = [
@@ -17,20 +19,15 @@ if Path("vendor/rclone").exists():
 
 a = Analysis(
     ["scripts/start_local_app.py"],
-    pathex=[],
+    pathex=[str(Path.cwd())],
     binaries=[],
     datas=datas,
-    hiddenimports=[
-        "app",
-        "app.main",
-        "app.core",
-        "app.core.database",
-        "app.core.downloader",
-        "app.core.excel_parser",
-        "app.core.security",
-        "app.core.tasks",
-        "app.tools",
-        "app.tools.printerval_session",
+    hiddenimports=collect_submodules("app")
+    + collect_submodules("uvicorn")
+    + [
+        "multipart",
+        "python_multipart",
+        "python_multipart.multipart",
     ],
     hookspath=[],
     hooksconfig={},

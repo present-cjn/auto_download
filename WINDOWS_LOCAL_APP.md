@@ -99,6 +99,14 @@ data\archives\
 - 完成 `gdrive` 授权后显示可访问。
 - 上传小批量 Excel 后能完成下载、失败重试和 ZIP 生成。
 
+如果 `AutoDownload.exe` 启动失败，发布目录会写入：
+
+```text
+startup-error.log
+```
+
+优先查看这个文件，它会记录完整 Python traceback。
+
 ## 发布包应包含
 
 ```text

@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import webbrowser
 from pathlib import Path
 from urllib.request import urlopen
@@ -46,6 +47,8 @@ def wait_for_health(url: str, timeout_seconds: int = 30) -> bool:
 def run_packaged_server(host: str, port: int, env: dict[str, str]) -> int:
     os.environ.update(env)
     os.chdir(ROOT)
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
     import uvicorn
     from app.main import app as fastapi_app
 
@@ -110,5 +113,22 @@ def main() -> int:
             process.terminate()
 
 
+def write_startup_error(exc: BaseException) -> Path:
+    log_path = ROOT / "startup-error.log"
+    detail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    log_path.write_text(detail, encoding="utf-8")
+    return log_path
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        exit_code = main()
+    except Exception as exc:
+        log_path = write_startup_error(exc)
+        print("Auto Download failed to start.", file=sys.stderr)
+        print(f"Startup error log: {log_path}", file=sys.stderr)
+        traceback.print_exception(type(exc), exc, exc.__traceback__)
+        if getattr(sys, "frozen", False):
+            input("Press Enter to close this window...")
+        raise
+    raise SystemExit(exit_code)
