@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from io import BytesIO
 import json
+import os
 from pathlib import Path
 import subprocess
 import time
@@ -108,6 +109,14 @@ PRINTERVAL_DESIGN_URL = (
     "m3vwych5r6zc7psqmakcpjvtfalrgfzsiuogh5m8-92f078ea09ab8bfa223b28f7b2cd18ea.png"
     "&is_show_product_image=0"
 )
+
+
+def slow_download_for_timeout_test(resource_id: str, output_dir: Path) -> None:
+    time.sleep(2)
+
+
+def challenge_download_for_timeout_test(resource_id: str, output_dir: Path) -> None:
+    raise PrintervalCloudflareChallengeError("Printerval Cloudflare challenge required")
 
 
 def make_zip(files: dict[str, bytes]) -> bytes:
@@ -254,7 +263,7 @@ def test_download_drive_file_by_id_uses_output_directory(tmp_path: Path, monkeyp
     assert calls == [
         {
             "id": "file123",
-            "output": f"{tmp_path}/",
+            "output": str(tmp_path) + os.sep,
             "quiet": False,
             "use_cookies": False,
         }
@@ -290,14 +299,14 @@ def test_download_drive_file_by_id_falls_back_to_uc_url(tmp_path: Path, monkeypa
         {
             "id": "file123",
             "url": None,
-            "output": f"{tmp_path}/",
+            "output": str(tmp_path) + os.sep,
             "quiet": False,
             "use_cookies": False,
         },
         {
             "id": None,
             "url": "https://drive.google.com/uc?id=file123",
-            "output": f"{tmp_path}/",
+            "output": str(tmp_path) + os.sep,
             "quiet": False,
             "use_cookies": False,
         },
@@ -409,6 +418,7 @@ def test_rclone_file_download_uses_copyid_directory_target(tmp_path: Path, monke
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.delenv("DRIVE_DOWNLOAD_BACKEND", raising=False)
+    monkeypatch.setenv("RCLONE_BIN", "rclone")
     monkeypatch.setenv("RCLONE_DRIVE_REMOTES", "gdrive_a")
     monkeypatch.setattr("app.core.downloader.subprocess.run", fake_run)
 
@@ -421,7 +431,7 @@ def test_rclone_file_download_uses_copyid_directory_target(tmp_path: Path, monke
             "copyid",
             "gdrive_a:",
             "file123",
-            f"{tmp_path}/",
+            str(tmp_path) + os.sep,
             "--local-encoding",
             "Slash,LtGt,DoubleQuote,Colon,Question,Asterisk,Pipe,BackSlash,Del,Ctl,InvalidUtf8,Dot",
             "--drive-pacer-min-sleep",
@@ -442,6 +452,7 @@ def test_rclone_remote_pool_retries_rate_limit_on_next_remote(tmp_path: Path, mo
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setenv("RCLONE_DRIVE_REMOTES", "gdrive_a, gdrive_b")
+    monkeypatch.setenv("RCLONE_BIN", "rclone")
     monkeypatch.setattr("app.core.downloader.subprocess.run", fake_run)
 
     download_drive_folder_by_id("folder123", tmp_path)
@@ -457,6 +468,7 @@ def test_rclone_remote_pool_stops_on_permission_error(tmp_path: Path, monkeypatc
         return subprocess.CompletedProcess(command, 1, stdout="", stderr="permission denied")
 
     monkeypatch.setenv("RCLONE_DRIVE_REMOTES", "gdrive_a, gdrive_b")
+    monkeypatch.setenv("RCLONE_BIN", "rclone")
     monkeypatch.setattr("app.core.downloader.subprocess.run", fake_run)
 
     try:
@@ -476,6 +488,10 @@ def test_cached_drive_folder_uses_resource_kind_prefix(tmp_path: Path, monkeypat
         (output_dir / "mockup.jpg").write_bytes(b"jpg")
 
     monkeypatch.setattr("app.core.downloader.download_drive_file_by_id", fake_download_file)
+    monkeypatch.setattr(
+        "app.core.downloader.run_download_with_timeout",
+        lambda download_func, resource_id, output_dir, timeout_seconds=None: download_func(resource_id, output_dir),
+    )
 
     cache_dir = cached_drive_folder(
         "https://drive.google.com/file/d/file123/view?usp=sharing",
@@ -516,6 +532,7 @@ def test_open_id_folder_resolves_with_rclone_folder_probe(tmp_path: Path, monkey
         (output_dir / "design.jpg").write_bytes(b"jpg")
 
     monkeypatch.setattr("app.core.downloader.subprocess.run", fake_run)
+    monkeypatch.setenv("RCLONE_BIN", "rclone")
     monkeypatch.setattr("app.core.downloader.download_drive_folder_by_id", fake_download_folder)
     monkeypatch.setattr(
         "app.core.downloader.run_download_with_timeout",
@@ -556,12 +573,12 @@ def test_open_id_file_resolves_with_rclone_folder_probe(tmp_path: Path, monkeypa
         (output_dir / "mockup.jpg").write_bytes(b"jpg")
 
     monkeypatch.setattr("app.core.downloader.subprocess.run", fake_run)
+    monkeypatch.setenv("RCLONE_BIN", "rclone")
     monkeypatch.setattr("app.core.downloader.download_drive_file_by_id", fake_download_file)
     monkeypatch.setattr(
         "app.core.downloader.run_download_with_timeout",
         lambda download_func, resource_id, output_dir, timeout_seconds=None: download_func(resource_id, output_dir),
     )
-
     cache_dir = cached_drive_folder("https://drive.google.com/open?id=file123", tmp_path)
 
     assert cache_dir == tmp_path / "file-file123"
@@ -608,6 +625,10 @@ def test_cached_drive_folder_reports_non_image_files(tmp_path: Path, monkeypatch
         (output_dir / "view?usp=sharing").write_text("not an image")
 
     monkeypatch.setattr("app.core.downloader.download_drive_file_by_id", fake_download_file)
+    monkeypatch.setattr(
+        "app.core.downloader.run_download_with_timeout",
+        lambda download_func, resource_id, output_dir, timeout_seconds=None: download_func(resource_id, output_dir),
+    )
 
     try:
         cached_drive_folder(
@@ -1493,12 +1514,9 @@ def test_plain_image_url_reports_http_status(tmp_path: Path, monkeypatch) -> Non
 
 
 def test_run_download_with_timeout_raises_timeout(tmp_path: Path) -> None:
-    def slow_download(resource_id: str, output_dir: Path) -> None:
-        time.sleep(2)
-
     try:
         run_download_with_timeout(
-            slow_download,
+            slow_download_for_timeout_test,
             "folder123",
             tmp_path,
             timeout_seconds=1,
@@ -1510,12 +1528,9 @@ def test_run_download_with_timeout_raises_timeout(tmp_path: Path) -> None:
 
 
 def test_run_download_with_timeout_restores_printerval_challenge_error(tmp_path: Path) -> None:
-    def challenge_download(resource_id: str, output_dir: Path) -> None:
-        raise PrintervalCloudflareChallengeError("Printerval Cloudflare challenge required")
-
     try:
         run_download_with_timeout(
-            challenge_download,
+            challenge_download_for_timeout_test,
             "https://printerval.com/folder-design",
             tmp_path,
             timeout_seconds=1,

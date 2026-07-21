@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.tools.printerval_session import page_is_verified, parse_args
 
 
@@ -15,7 +17,7 @@ def test_printerval_session_parse_args_defaults() -> None:
     args = parse_args([])
 
     assert args.url == "https://printerval.com/"
-    assert args.profile == "data/browser-profiles/printerval-main"
+    assert args.profile == str(Path("data/browser-profiles/printerval-main"))
     assert args.timeout_seconds == 600
     assert args.headless is False
 

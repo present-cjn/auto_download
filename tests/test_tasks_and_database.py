@@ -204,10 +204,11 @@ def test_enqueue_production_outbox_for_ready_items_is_idempotent(tmp_path: Path)
         assert rows[0]["status"] == "pending_push"
         assert rows[0]["idempotency_key"] == f"batch:{batch_id}:order:{item['order_id']}:sku:SKU-A"
         payload = json.loads(rows[0]["payload_json"])
+        expected_local_path = str(Path("data/orders/1/SKU-A/design.jpg"))
         assert payload["files"] == [
             {
                 "file_name": "design.jpg",
-                "local_path": "data/orders/1/SKU-A/design.jpg",
+                "local_path": expected_local_path,
                 "file_size": 123,
                 "source_type": "design",
             }
