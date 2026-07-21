@@ -45,6 +45,11 @@ def wait_for_health(url: str, timeout_seconds: int = 30) -> bool:
 
 
 def run_packaged_server(host: str, port: int, env: dict[str, str]) -> int:
+    resource_root = Path(getattr(sys, "_MEIPASS", ROOT))
+    env = {
+        **env,
+        "APP_RESOURCE_ROOT": str(resource_root),
+    }
     os.environ.update(env)
     os.chdir(ROOT)
     if str(ROOT) not in sys.path:

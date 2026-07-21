@@ -6,6 +6,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -44,9 +45,23 @@ from app.core.tasks import (
 from scripts.download_speed_report import build_speed_report, format_seconds
 
 
+def resource_root() -> Path:
+    configured = os.getenv("APP_RESOURCE_ROOT", "").strip()
+    if configured:
+        return Path(configured)
+    bundled_root = getattr(sys, "_MEIPASS", "")
+    if bundled_root:
+        return Path(str(bundled_root))
+    return Path(".")
+
+
+def resource_path(relative_path: str) -> Path:
+    return resource_root() / relative_path
+
+
 app = FastAPI(title="Order Design Image Downloader")
-templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory=str(resource_path("templates")))
+app.mount("/static", StaticFiles(directory=str(resource_path("static"))), name="static")
 
 SESSION_COOKIE = "app_session"
 RESOURCES_DIR = Path("data/resources")
@@ -75,7 +90,7 @@ AUTO_BROWSER_EXTENSION_FILES = [
     "popup.css",
     "popup.js",
 ]
-AUTO_BROWSER_EXTENSION_DIR = Path("browser-extension")
+AUTO_BROWSER_EXTENSION_DIR = resource_path("browser-extension")
 
 
 STATUS_LABELS = {
