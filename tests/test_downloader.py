@@ -337,7 +337,7 @@ def test_download_drive_file_by_id_reports_attempt_details(tmp_path: Path, monke
         @staticmethod
         def download(id=None, url=None, output="", quiet=False, use_cookies=False):
             Path(output).mkdir(parents=True, exist_ok=True)
-            (Path(output) / "view?usp=sharing").write_text("not an image")
+            (Path(output) / "downloaded-html").write_text("not an image")
             return None
 
     monkeypatch.setattr("app.core.downloader.import_gdown", lambda: FakeGdown)
@@ -351,7 +351,7 @@ def test_download_drive_file_by_id_reports_attempt_details(tmp_path: Path, monke
         assert "method=file_id" in message
         assert "method=uc_url" in message
         assert "gdown returned None" in message
-        assert "view?usp=sharing" in message
+        assert "downloaded-html" in message
     else:
         raise AssertionError("Expected DriveDownloadError")
 
@@ -622,7 +622,7 @@ def test_cached_drive_folder_reports_non_image_files(tmp_path: Path, monkeypatch
     def fake_download_file(file_id: str, output_dir: Path) -> None:
         assert file_id == "file123"
         output_dir.mkdir(parents=True, exist_ok=True)
-        (output_dir / "view?usp=sharing").write_text("not an image")
+        (output_dir / "downloaded-html").write_text("not an image")
 
     monkeypatch.setattr("app.core.downloader.download_drive_file_by_id", fake_download_file)
     monkeypatch.setattr(
@@ -639,7 +639,7 @@ def test_cached_drive_folder_reports_non_image_files(tmp_path: Path, monkeypatch
         message = str(exc)
         assert "no image files were found" in message
         assert "resource=file:file123" in message
-        assert "view?usp=sharing" in message
+        assert "downloaded-html" in message
     else:
         raise AssertionError("Expected DriveDownloadError")
 
