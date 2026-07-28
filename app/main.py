@@ -876,11 +876,31 @@ def update_drive_auth_state(**patch: Any) -> None:
         DRIVE_AUTH_STATE.update(patch)
 
 
+def rclone_drive_oauth_config_options() -> list[str]:
+    options = [
+        "scope",
+        "drive.readonly",
+        "config_is_local",
+        "true",
+    ]
+    client_id = os.getenv("RCLONE_DRIVE_CLIENT_ID", "").strip()
+    client_secret = os.getenv("RCLONE_DRIVE_CLIENT_SECRET", "").strip()
+    if client_id:
+        options.extend(["client_id", client_id])
+    if client_secret:
+        options.extend(["client_secret", client_secret])
+    return options
+
+
+def rclone_reconnect_command(rclone_exe: str, remote_name: str) -> list[str]:
+    return [str(rclone_exe), "config", "reconnect", f"{remote_name}:"]
+
+
 def rclone_auth_command(health: dict[str, Any]) -> tuple[str, list[str]]:
     rclone_exe = health.get("rclone_path") or health.get("rclone_bin") or rclone_bin()
     remote_name = str(health.get("remote_name") or "gdrive").rstrip(":")
     if health.get("remote_configured"):
-        return "reconnect", [str(rclone_exe), "config", "reconnect", f"{remote_name}:"]
+        return "reconnect", rclone_reconnect_command(str(rclone_exe), remote_name)
     return (
         "create",
         [
@@ -889,15 +909,22 @@ def rclone_auth_command(health: dict[str, Any]) -> tuple[str, list[str]]:
             "create",
             remote_name,
             "drive",
-            "scope",
-            "drive.readonly",
-            "config_is_local",
-            "true",
+            *rclone_drive_oauth_config_options(),
         ],
     )
 
 
+def should_retry_drive_auth_with_reconnect(health: dict[str, Any]) -> bool:
+    error = str(health.get("error") or "").lower()
+    return bool(health.get("remote_configured")) and (
+        "empty token" in error
+        or "please run" in error and "config reconnect" in error
+        or not health.get("remote_accessible")
+    )
+
+
 def run_drive_auth_command(mode: str, command: list[str]) -> None:
+    completed: subprocess.CompletedProcess[Any]
     try:
         completed = subprocess.run(command, cwd=Path.cwd(), check=False)
     except OSError as exc:
@@ -909,6 +936,22 @@ def run_drive_auth_command(mode: str, command: list[str]) -> None:
         )
         return
     health = local_drive_health()
+    if mode == "create" and should_retry_drive_auth_with_reconnect(health):
+        rclone_exe = health.get("rclone_path") or health.get("rclone_bin") or rclone_bin()
+        remote_name = str(health.get("remote_name") or "gdrive").rstrip(":")
+        reconnect_command = rclone_reconnect_command(str(rclone_exe), remote_name)
+        update_drive_auth_state(command=reconnect_command, mode="reconnect")
+        try:
+            completed = subprocess.run(reconnect_command, cwd=Path.cwd(), check=False)
+        except OSError as exc:
+            update_drive_auth_state(
+                running=False,
+                completed_at=utc_now_string(),
+                returncode=-1,
+                error=str(exc),
+            )
+            return
+        health = local_drive_health()
     error = ""
     if completed.returncode != 0:
         error = f"rclone 授权命令退出码 {completed.returncode}"
