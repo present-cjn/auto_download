@@ -7,6 +7,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -138,6 +139,16 @@ PRECHECK_TAB_BATCH_STATUSES = {
 }
 DOWNLOAD_TAB_BATCH_STATUSES = {"confirmed", "processing", "completed", "completed_with_errors"}
 COMPLETED_DOWNLOAD_DURATION_STATUSES = {"completed", "completed_with_errors"}
+DRIVE_AUTH_LOCK = threading.Lock()
+DRIVE_AUTH_STATE: dict[str, Any] = {
+    "running": False,
+    "command": [],
+    "started_at": "",
+    "completed_at": "",
+    "returncode": None,
+    "error": "",
+    "mode": "",
+}
 
 
 def configured_extension_max_attempts() -> int:
@@ -846,6 +857,91 @@ def local_drive_health(timeout_seconds: int = 15) -> dict[str, Any]:
     return health
 
 
+def drive_auth_state() -> dict[str, Any]:
+    with DRIVE_AUTH_LOCK:
+        return {
+            **DRIVE_AUTH_STATE,
+            "command": list(DRIVE_AUTH_STATE.get("command") or []),
+        }
+
+
+def update_drive_auth_state(**patch: Any) -> None:
+    with DRIVE_AUTH_LOCK:
+        DRIVE_AUTH_STATE.update(patch)
+
+
+def rclone_auth_command(health: dict[str, Any]) -> tuple[str, list[str]]:
+    rclone_exe = health.get("rclone_path") or health.get("rclone_bin") or rclone_bin()
+    remote_name = str(health.get("remote_name") or "gdrive").rstrip(":")
+    if health.get("remote_configured"):
+        return "reconnect", [str(rclone_exe), "config", "reconnect", f"{remote_name}:"]
+    return (
+        "create",
+        [
+            str(rclone_exe),
+            "config",
+            "create",
+            remote_name,
+            "drive",
+            "scope",
+            "drive.readonly",
+            "config_is_local",
+            "true",
+        ],
+    )
+
+
+def run_drive_auth_command(mode: str, command: list[str]) -> None:
+    try:
+        completed = subprocess.run(command, cwd=Path.cwd(), check=False)
+    except OSError as exc:
+        update_drive_auth_state(
+            running=False,
+            completed_at=utc_now_string(),
+            returncode=-1,
+            error=str(exc),
+        )
+        return
+    health = local_drive_health()
+    error = ""
+    if completed.returncode != 0:
+        error = f"rclone 授权命令退出码 {completed.returncode}"
+    elif not health.get("ok"):
+        error = str(health.get("error") or "授权完成后仍无法访问 Google Drive。")
+    update_drive_auth_state(
+        running=False,
+        completed_at=utc_now_string(),
+        returncode=completed.returncode,
+        error=error,
+    )
+
+
+def start_drive_auth() -> dict[str, Any]:
+    health = local_drive_health(timeout_seconds=5)
+    if not health["rclone_installed"]:
+        raise HTTPException(status_code=400, detail=health["error"] or "未找到 rclone。")
+    state = drive_auth_state()
+    if state["running"]:
+        return state
+    mode, command = rclone_auth_command(health)
+    update_drive_auth_state(
+        running=True,
+        command=command,
+        started_at=utc_now_string(),
+        completed_at="",
+        returncode=None,
+        error="",
+        mode=mode,
+    )
+    worker = threading.Thread(
+        target=run_drive_auth_command,
+        args=(mode, command),
+        daemon=True,
+    )
+    worker.start()
+    return drive_auth_state()
+
+
 def batch_primary_action(batch: dict, counts: dict[str, int]) -> dict[str, str]:
     work_state = batch_work_state(batch, counts)
     actions = batch_download_actions(batch, counts)
@@ -1153,14 +1249,21 @@ def drive_settings_page(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="drive_settings.html",
-        context=template_context(user, health=health),
+        context=template_context(user, health=health, auth_state=drive_auth_state()),
     )
 
 
 @app.get("/api/local/drive-health")
 def local_drive_health_api(request: Request):
     require_user(request)
-    return local_drive_health()
+    return {"health": local_drive_health(), "auth_state": drive_auth_state()}
+
+
+@app.post("/settings/drive/login")
+def start_drive_login(request: Request):
+    require_user(request)
+    start_drive_auth()
+    return RedirectResponse("/settings/drive", status_code=303)
 
 
 @app.post("/quota")

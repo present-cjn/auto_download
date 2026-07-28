@@ -30,12 +30,35 @@
   {% if health.error %}
   <div class="notice error-block">{{ health.error }}</div>
   {% endif %}
+  {% if auth_state.running %}
+  <div class="notice">正在等待 Google Drive 授权完成。浏览器打开后，请登录能访问设计图的 Google 账号并允许只读权限。</div>
+  {% elif auth_state.error %}
+  <div class="notice error-block">{{ auth_state.error }}</div>
+  {% endif %}
 </section>
 
 <section class="settings-panel">
   <div class="section-heading">
-    <h2>首次配置</h2>
-    <p>在 Windows 电脑上安装 rclone 后，用只读权限登录能访问设计图的 Google 账号。</p>
+    <h2>Google Drive 登录</h2>
+    <p>点击后会自动打开浏览器，使用能访问设计图的 Google 账号授权只读权限。</p>
+  </div>
+  <form method="post" action="/settings/drive/login">
+    <button class="button primary" type="submit" {% if not health.rclone_installed or auth_state.running %}disabled{% endif %}>
+      {% if health.remote_configured %}重新登录 Google Drive{% else %}登录 Google Drive{% endif %}
+    </button>
+    <a class="button subtle" href="/settings/drive">刷新状态</a>
+  </form>
+  <div class="warning-list">
+    <span>授权名称固定为 {{ health.remote_name }}。</span>
+    <span>权限固定为 drive.readonly，只读取和下载文件。</span>
+    <span>Google token 只保存在当前电脑的 rclone 配置中。</span>
+  </div>
+</section>
+
+<section class="settings-panel">
+  <div class="section-heading">
+    <h2>高级排障</h2>
+    <p>只有自动登录失败时再使用命令行配置入口。</p>
   </div>
   <pre class="command-block">configure_drive.bat</pre>
   <div class="warning-list">
@@ -45,4 +68,12 @@
     <span>配置完成后回到本页刷新，确认 Drive 访问为可访问。</span>
   </div>
 </section>
+
+{% if auth_state.running %}
+<script>
+  window.setTimeout(function () {
+    window.location.reload();
+  }, 3000);
+</script>
+{% endif %}
 {% endblock %}

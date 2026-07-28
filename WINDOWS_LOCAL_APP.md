@@ -62,11 +62,11 @@ python -m venv .venv
 1. 双击 `AutoDownload.exe`。
 2. 登录本地系统账号。
 3. 打开“Drive 设置”。
-4. 如果 Drive 未授权，在发布目录双击或命令行执行：
+4. 点击“登录 Google Drive”。
+5. 浏览器打开后，登录能访问设计图的 Google 账号并允许只读权限。
+6. 回到“Drive 设置”，确认 Drive 访问为“可访问”。
 
-```bat
-configure_drive.bat
-```
+如果页面登录失败，再在发布目录双击或命令行执行 `configure_drive.bat` 做高级排障。
 
 推荐配置：
 

@@ -16,3 +16,39 @@ def test_local_drive_health_reports_missing_rclone(monkeypatch) -> None:
     assert health["remote_accessible"] is False
     assert health["ok"] is False
     assert "未找到 rclone" in health["error"]
+
+
+def test_rclone_auth_command_creates_missing_remote() -> None:
+    mode, command = app_main.rclone_auth_command(
+        {
+            "rclone_path": "rclone",
+            "remote_name": "gdrive",
+            "remote_configured": False,
+        }
+    )
+
+    assert mode == "create"
+    assert command == [
+        "rclone",
+        "config",
+        "create",
+        "gdrive",
+        "drive",
+        "scope",
+        "drive.readonly",
+        "config_is_local",
+        "true",
+    ]
+
+
+def test_rclone_auth_command_reconnects_existing_remote() -> None:
+    mode, command = app_main.rclone_auth_command(
+        {
+            "rclone_path": "rclone",
+            "remote_name": "gdrive",
+            "remote_configured": True,
+        }
+    )
+
+    assert mode == "reconnect"
+    assert command == ["rclone", "config", "reconnect", "gdrive:"]
