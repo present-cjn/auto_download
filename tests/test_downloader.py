@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import time
 import zipfile
 
@@ -406,6 +407,21 @@ def test_rclone_bin_uses_bundled_when_env_is_missing(monkeypatch) -> None:
     bundled = Path("vendor/rclone/rclone.exe")
     monkeypatch.delenv("RCLONE_BIN", raising=False)
     monkeypatch.setattr(downloader, "bundled_rclone_bin", lambda: bundled)
+
+    assert downloader.rclone_bin() == str(bundled)
+
+
+def test_rclone_bin_uses_pyinstaller_resource_root(tmp_path: Path, monkeypatch) -> None:
+    from app.core import downloader
+
+    executable_name = "rclone.exe" if os.name == "nt" else "rclone"
+    bundled = tmp_path / "_internal" / "vendor" / "rclone" / executable_name
+    bundled.parent.mkdir(parents=True)
+    bundled.write_text("", encoding="utf-8")
+    monkeypatch.delenv("RCLONE_BIN", raising=False)
+    monkeypatch.setenv("APP_RESOURCE_ROOT", str(tmp_path / "_internal"))
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "AutoDownload.exe"))
 
     assert downloader.rclone_bin() == str(bundled)
 

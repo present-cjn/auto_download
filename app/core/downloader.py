@@ -689,10 +689,38 @@ def app_runtime_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def app_resource_roots() -> list[Path]:
+    roots = []
+    configured = os.getenv("APP_RESOURCE_ROOT", "").strip()
+    if configured:
+        roots.append(Path(configured))
+    bundled_root = getattr(sys, "_MEIPASS", "")
+    if bundled_root:
+        roots.append(Path(str(bundled_root)))
+    roots.append(app_runtime_root())
+
+    unique_roots = []
+    seen = set()
+    for root in roots:
+        key = str(root)
+        if key not in seen:
+            unique_roots.append(root)
+            seen.add(key)
+    return unique_roots
+
+
 def bundled_rclone_bin() -> Optional[Path]:
     executable_name = "rclone.exe" if os.name == "nt" else "rclone"
-    candidate = app_runtime_root() / "vendor" / "rclone" / executable_name
-    return candidate if candidate.exists() else None
+    for root in app_resource_roots():
+        candidate = root / "vendor" / "rclone" / executable_name
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def rclone_search_locations() -> list[Path]:
+    executable_name = "rclone.exe" if os.name == "nt" else "rclone"
+    return [root / "vendor" / "rclone" / executable_name for root in app_resource_roots()]
 
 
 def rclone_bin() -> str:

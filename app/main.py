@@ -20,7 +20,12 @@ from fastapi.templating import Jinja2Templates
 
 from app.core import database as db
 from app.core.downloader import ERROR_LABELS, parse_drive_resource, safe_filename
-from app.core.downloader import drive_download_backend, rclone_bin, rclone_drive_remotes
+from app.core.downloader import (
+    drive_download_backend,
+    rclone_bin,
+    rclone_drive_remotes,
+    rclone_search_locations,
+)
 from app.core.excel_parser import build_import_summary
 from app.core.security import (
     hash_password,
@@ -812,7 +817,8 @@ def local_drive_health(timeout_seconds: int = 15) -> dict[str, Any]:
         health["error"] = "当前下载后端不是 rclone。"
         return health
     if not resolved_bin:
-        health["error"] = f"未找到 rclone 程序：{configured_bin}"
+        locations = "；".join(str(path) for path in rclone_search_locations())
+        health["error"] = f"未找到 rclone 程序：{configured_bin}。已检查：{locations}"
         return health
 
     try:
