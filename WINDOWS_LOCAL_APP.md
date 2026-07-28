@@ -24,6 +24,40 @@ vendor/rclone/rclone.exe
 2. 发布目录内置的 `vendor/rclone/rclone.exe`。
 3. 系统 `PATH` 里的 `rclone`。
 
+PyInstaller onedir 打包后，发布目录里通常会看到：
+
+```text
+dist\AutoDownload\_internal\vendor\rclone\rclone.exe
+```
+
+这是正常结构，不需要手工把 `_internal` 里的 `vendor` 复制到外层。
+
+## 准备 Google OAuth Client
+
+正式使用时不要长期依赖 rclone 共享 Google Drive client。建议公司统一创建一个 Google Cloud OAuth Desktop app：
+
+1. 在 Google Cloud 项目中启用 Google Drive API。
+2. 创建 OAuth client，应用类型选择 Desktop app。
+3. 记录 `client_id` 和 `client_secret`。
+
+应用支持两种配置方式。
+
+方式一：在页面配置。
+
+1. 启动 `AutoDownload.exe`。
+2. 打开“Drive 设置”。
+3. 在“公司 OAuth Client”里填写 `client_id` 和 `client_secret`。
+4. 保存后点击“重新登录 Google Drive”。
+
+方式二：使用本地配置文件。复制示例文件：
+
+```bat
+mkdir data
+copy local_settings.example.json data\local_settings.json
+```
+
+然后编辑 `data\local_settings.json`，填入真实值。真实配置文件只保存在本机，不要提交 Git。
+
 ## 本地开发启动
 
 ```bat
@@ -62,9 +96,12 @@ python -m venv .venv
 1. 双击 `AutoDownload.exe`。
 2. 登录本地系统账号。
 3. 打开“Drive 设置”。
-4. 点击“登录 Google Drive”。
-5. 浏览器打开后，登录能访问设计图的 Google 账号并允许只读权限。
-6. 回到“Drive 设置”，确认 Drive 访问为“可访问”。
+4. 确认“公司 OAuth Client”为“已配置”。
+5. 点击“登录 Google Drive”。
+6. 浏览器打开后，登录能访问设计图的 Google 账号并允许只读权限。
+7. 回到“Drive 设置”，确认 Drive 访问为“可访问”。
+
+如果之前已经创建过失败的 `gdrive` remote，可以在“Drive 设置”点击“重建 Drive 登录”，然后重新登录。重建只删除本机 rclone remote，不会删除 Google Drive 文件。
 
 如果页面登录失败，再在发布目录双击或命令行执行 `configure_drive.bat` 做高级排障。
 
@@ -95,6 +132,7 @@ data\archives\
 
 - 在干净 Windows 电脑上启动 `AutoDownload.exe`。
 - Drive 设置页能识别内置 `vendor\rclone\rclone.exe`。
+- Drive 设置页显示公司 OAuth client 已配置。
 - 未授权时能显示明确错误。
 - 完成 `gdrive` 授权后显示可访问。
 - 上传小批量 Excel 后能完成下载、失败重试和 ZIP 生成。

@@ -8,6 +8,7 @@ from PyInstaller.utils.hooks import collect_submodules
 block_cipher = None
 datas = [
     ("configure_drive.bat", "."),
+    ("local_settings.example.json", "."),
     ("templates", "templates"),
     ("static", "static"),
     ("browser-extension", "browser-extension"),

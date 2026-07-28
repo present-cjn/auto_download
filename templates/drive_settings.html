@@ -26,7 +26,11 @@
     <div><span>{{ health.remote_name }}</span><label>Remote</label></div>
     <div><span>{{ "已配置" if health.remote_configured else "未配置" }}</span><label>授权配置</label></div>
     <div><span>{{ "可访问" if health.remote_accessible else "不可访问" }}</span><label>Drive 访问</label></div>
+    <div><span>{{ "公司 Client" if health.oauth_client_configured else "共享 Client" }}</span><label>OAuth</label></div>
   </div>
+  {% if health.warning %}
+  <div class="notice warning-block">{{ health.warning }}</div>
+  {% endif %}
   {% if health.error %}
   <div class="notice error-block">{{ health.error }}</div>
   {% endif %}
@@ -35,6 +39,39 @@
   {% elif auth_state.error %}
   <div class="notice error-block">{{ auth_state.error }}</div>
   {% endif %}
+</section>
+
+<section class="settings-panel">
+  <div class="section-heading">
+    <h2>公司 OAuth Client</h2>
+    <p>使用公司 Google Cloud Desktop OAuth client，避免继续依赖 rclone 共享 client。</p>
+  </div>
+  <div class="summary-grid compact">
+    <div><span>{{ "已配置" if oauth_config.configured else "未配置" }}</span><label>状态</label></div>
+    <div><span>{{ oauth_config.source_label }}</span><label>来源</label></div>
+    <div><span>{{ oauth_config.client_id_masked or "-" }}</span><label>Client ID</label></div>
+  </div>
+  <form class="settings-form" method="post" action="/settings/drive/oauth">
+    <label>
+      Client ID
+      <input type="text" name="client_id" autocomplete="off" placeholder="Google OAuth Desktop client_id">
+    </label>
+    <label>
+      Client Secret
+      <input type="password" name="client_secret" autocomplete="new-password" placeholder="Google OAuth Desktop client_secret">
+    </label>
+    <div class="actions">
+      <button class="button primary" type="submit">保存 OAuth Client</button>
+    </div>
+  </form>
+  <form class="inline-form" method="post" action="/settings/drive/oauth/clear">
+    <button class="button subtle" type="submit" {% if oauth_config.source == "environment" %}disabled{% endif %}>清空本地配置</button>
+  </form>
+  <div class="warning-list">
+    <span>保存后请重新登录 Google Drive。</span>
+    <span>如果使用环境变量配置，本页不会覆盖环境变量。</span>
+    <span>client_secret 不会在页面明文回显。</span>
+  </div>
 </section>
 
 <section class="settings-panel">
@@ -48,10 +85,14 @@
     </button>
     <a class="button subtle" href="/settings/drive">刷新状态</a>
   </form>
+  <form class="inline-form" method="post" action="/settings/drive/reset">
+    <button class="button danger" type="submit" {% if not health.remote_configured or auth_state.running %}disabled{% endif %}>重建 Drive 登录</button>
+  </form>
   <div class="warning-list">
     <span>授权名称固定为 {{ health.remote_name }}。</span>
     <span>权限固定为 drive.readonly，只读取和下载文件。</span>
     <span>Google token 只保存在当前电脑的 rclone 配置中。</span>
+    <span>重建会删除本机 {{ health.remote_name }} remote，但不会删除 Google Drive 文件。</span>
   </div>
 </section>
 

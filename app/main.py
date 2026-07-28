@@ -71,6 +71,7 @@ app.mount("/static", StaticFiles(directory=str(resource_path("static"))), name="
 
 SESSION_COOKIE = "app_session"
 RESOURCES_DIR = Path("data/resources")
+LOCAL_SETTINGS_PATH = Path("data/local_settings.json")
 VALID_ROLES = {"developer", "admin", "operator"}
 ROLE_LABELS = {
     "developer": "开发者",
@@ -794,6 +795,7 @@ def server_download_controls(batch: dict, counts: dict[str, int], handled_count:
 def local_drive_health(timeout_seconds: int = 15) -> dict[str, Any]:
     backend = drive_download_backend()
     configured_bin = rclone_bin()
+    oauth_config = drive_oauth_config()
     configured_path = Path(configured_bin)
     resolved_bin = (
         str(configured_path)
@@ -810,8 +812,12 @@ def local_drive_health(timeout_seconds: int = 15) -> dict[str, Any]:
         "remote_name": primary_remote,
         "remote_configured": False,
         "remote_accessible": False,
+        "oauth_client_configured": oauth_config["configured"],
+        "oauth_client_source": oauth_config["source"],
+        "oauth_client_id": oauth_config["client_id_masked"],
         "ok": False,
         "error": "",
+        "warning": "" if oauth_config["configured"] else "当前未配置公司 Google OAuth client，会回退使用 rclone 共享 client；该共享 client 在 2026 年有中断风险。",
     }
     if backend != "rclone":
         health["error"] = "当前下载后端不是 rclone。"
@@ -876,6 +882,57 @@ def update_drive_auth_state(**patch: Any) -> None:
         DRIVE_AUTH_STATE.update(patch)
 
 
+def load_local_settings() -> dict[str, Any]:
+    try:
+        with LOCAL_SETTINGS_PATH.open("r", encoding="utf-8") as file:
+            value = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def save_local_settings(settings: dict[str, Any]) -> None:
+    LOCAL_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with LOCAL_SETTINGS_PATH.open("w", encoding="utf-8") as file:
+        json.dump(settings, file, ensure_ascii=False, indent=2)
+        file.write("\n")
+
+
+def masked_secret(value: str) -> str:
+    if not value:
+        return ""
+    if len(value) <= 10:
+        return value[:2] + "..." + value[-2:]
+    return value[:6] + "..." + value[-4:]
+
+
+def drive_oauth_config() -> dict[str, Any]:
+    settings = load_local_settings()
+    client_id = os.getenv("RCLONE_DRIVE_CLIENT_ID", "").strip()
+    client_secret = os.getenv("RCLONE_DRIVE_CLIENT_SECRET", "").strip()
+    source = "environment" if client_id or client_secret else ""
+    if not client_id:
+        client_id = str(settings.get("rclone_drive_client_id") or "").strip()
+        source = "local_settings" if client_id else source
+    if not client_secret:
+        client_secret = str(settings.get("rclone_drive_client_secret") or "").strip()
+        source = "local_settings" if client_secret and not source else source
+    configured = bool(client_id and client_secret)
+    return {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "client_id_masked": masked_secret(client_id),
+        "client_secret_masked": masked_secret(client_secret),
+        "configured": configured,
+        "source": source or "rclone_shared",
+        "source_label": {
+            "environment": "环境变量",
+            "local_settings": "本地配置文件",
+            "rclone_shared": "rclone 共享 client",
+        }.get(source or "rclone_shared", source or "rclone 共享 client"),
+    }
+
+
 def rclone_drive_oauth_config_options() -> list[str]:
     options = [
         "scope",
@@ -883,13 +940,24 @@ def rclone_drive_oauth_config_options() -> list[str]:
         "config_is_local",
         "true",
     ]
-    client_id = os.getenv("RCLONE_DRIVE_CLIENT_ID", "").strip()
-    client_secret = os.getenv("RCLONE_DRIVE_CLIENT_SECRET", "").strip()
+    oauth_config = drive_oauth_config()
+    client_id = oauth_config["client_id"]
+    client_secret = oauth_config["client_secret"]
     if client_id:
         options.extend(["client_id", client_id])
     if client_secret:
         options.extend(["client_secret", client_secret])
     return options
+
+
+def rclone_update_command(rclone_exe: str, remote_name: str) -> list[str]:
+    return [
+        str(rclone_exe),
+        "config",
+        "update",
+        remote_name,
+        *rclone_drive_oauth_config_options(),
+    ]
 
 
 def rclone_reconnect_command(rclone_exe: str, remote_name: str) -> list[str]:
@@ -925,6 +993,30 @@ def should_retry_drive_auth_with_reconnect(health: dict[str, Any]) -> bool:
 
 def run_drive_auth_command(mode: str, command: list[str]) -> None:
     completed: subprocess.CompletedProcess[Any]
+    if mode == "reconnect" and drive_oauth_config()["configured"] and len(command) >= 4:
+        rclone_exe = command[0]
+        remote_name = str(command[3]).rstrip(":")
+        update_command = rclone_update_command(rclone_exe, remote_name)
+        update_drive_auth_state(command=update_command, mode="update")
+        try:
+            completed = subprocess.run(update_command, cwd=Path.cwd(), check=False)
+        except OSError as exc:
+            update_drive_auth_state(
+                running=False,
+                completed_at=utc_now_string(),
+                returncode=-1,
+                error=str(exc),
+            )
+            return
+        if completed.returncode != 0:
+            update_drive_auth_state(
+                running=False,
+                completed_at=utc_now_string(),
+                returncode=completed.returncode,
+                error=f"rclone OAuth 配置更新失败，退出码 {completed.returncode}",
+            )
+            return
+        update_drive_auth_state(command=command, mode="reconnect")
     try:
         completed = subprocess.run(command, cwd=Path.cwd(), check=False)
     except OSError as exc:
@@ -989,6 +1081,32 @@ def start_drive_auth() -> dict[str, Any]:
     )
     worker.start()
     return drive_auth_state()
+
+
+def reset_drive_remote() -> None:
+    health = local_drive_health(timeout_seconds=5)
+    if not health["rclone_installed"]:
+        raise HTTPException(status_code=400, detail=health["error"] or "未找到 rclone。")
+    state = drive_auth_state()
+    if state["running"]:
+        raise HTTPException(status_code=400, detail="Google Drive 授权正在运行，完成后再重建。")
+    remote_name = str(health.get("remote_name") or "gdrive").rstrip(":")
+    if not health["remote_configured"]:
+        return
+    try:
+        completed = subprocess.run(
+            [health["rclone_path"], "config", "delete", remote_name],
+            cwd=Path.cwd(),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise HTTPException(status_code=400, detail=f"rclone 删除 remote 失败：{exc}") from exc
+    if completed.returncode != 0:
+        error = completed.stderr.strip() or completed.stdout.strip() or f"rclone 删除 remote 失败，退出码 {completed.returncode}"
+        raise HTTPException(status_code=400, detail=error)
 
 
 def batch_primary_action(batch: dict, counts: dict[str, int]) -> dict[str, str]:
@@ -1295,10 +1413,16 @@ def quota_page(request: Request, month: str = ""):
 def drive_settings_page(request: Request):
     user = require_user(request)
     health = local_drive_health()
+    oauth_config = drive_oauth_config()
     return templates.TemplateResponse(
         request=request,
         name="drive_settings.html",
-        context=template_context(user, health=health, auth_state=drive_auth_state()),
+        context=template_context(
+            user,
+            health=health,
+            auth_state=drive_auth_state(),
+            oauth_config=oauth_config,
+        ),
     )
 
 
@@ -1312,6 +1436,45 @@ def local_drive_health_api(request: Request):
 def start_drive_login(request: Request):
     require_user(request)
     start_drive_auth()
+    return RedirectResponse("/settings/drive", status_code=303)
+
+
+@app.post("/settings/drive/oauth")
+def save_drive_oauth_settings(
+    request: Request,
+    client_id: str = Form(""),
+    client_secret: str = Form(""),
+):
+    require_user(request)
+    settings = load_local_settings()
+    client_id = client_id.strip()
+    client_secret = client_secret.strip()
+    if client_id and client_secret:
+        settings["rclone_drive_client_id"] = client_id
+        settings["rclone_drive_client_secret"] = client_secret
+    elif not client_id and not client_secret:
+        settings.pop("rclone_drive_client_id", None)
+        settings.pop("rclone_drive_client_secret", None)
+    else:
+        raise HTTPException(status_code=400, detail="client_id 和 client_secret 需要同时填写，或同时留空。")
+    save_local_settings(settings)
+    return RedirectResponse("/settings/drive", status_code=303)
+
+
+@app.post("/settings/drive/oauth/clear")
+def clear_drive_oauth_settings(request: Request):
+    require_user(request)
+    settings = load_local_settings()
+    settings.pop("rclone_drive_client_id", None)
+    settings.pop("rclone_drive_client_secret", None)
+    save_local_settings(settings)
+    return RedirectResponse("/settings/drive", status_code=303)
+
+
+@app.post("/settings/drive/reset")
+def reset_drive_login(request: Request):
+    require_user(request)
+    reset_drive_remote()
     return RedirectResponse("/settings/drive", status_code=303)
 
 

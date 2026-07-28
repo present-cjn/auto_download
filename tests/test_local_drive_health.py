@@ -1,6 +1,17 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from app import main as app_main
+
+
+@pytest.fixture(autouse=True)
+def isolated_local_settings(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(app_main, "LOCAL_SETTINGS_PATH", tmp_path / "local_settings.json")
+    monkeypatch.delenv("RCLONE_DRIVE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("RCLONE_DRIVE_CLIENT_SECRET", raising=False)
 
 
 def test_local_drive_health_reports_missing_rclone(monkeypatch) -> None:
@@ -14,8 +25,11 @@ def test_local_drive_health_reports_missing_rclone(monkeypatch) -> None:
     assert health["rclone_installed"] is False
     assert health["remote_configured"] is False
     assert health["remote_accessible"] is False
+    assert health["oauth_client_configured"] is False
+    assert health["oauth_client_source"] == "rclone_shared"
     assert health["ok"] is False
     assert "未找到 rclone" in health["error"]
+    assert "共享 client" in health["warning"]
 
 
 def test_rclone_auth_command_creates_missing_remote() -> None:
@@ -81,6 +95,95 @@ def test_rclone_auth_command_includes_custom_oauth_client(monkeypatch) -> None:
         "client-id",
         "client_secret",
         "client-secret",
+    ]
+
+
+def test_drive_oauth_config_reads_local_settings() -> None:
+    app_main.save_local_settings(
+        {
+            "rclone_drive_client_id": "local-client-id",
+            "rclone_drive_client_secret": "local-client-secret",
+        }
+    )
+
+    config = app_main.drive_oauth_config()
+
+    assert config["configured"] is True
+    assert config["source"] == "local_settings"
+    assert config["client_id"] == "local-client-id"
+    assert config["client_secret"] == "local-client-secret"
+    assert config["client_id_masked"] == "local-...t-id"
+
+
+def test_drive_oauth_config_prefers_environment(monkeypatch) -> None:
+    app_main.save_local_settings(
+        {
+            "rclone_drive_client_id": "local-client-id",
+            "rclone_drive_client_secret": "local-client-secret",
+        }
+    )
+    monkeypatch.setenv("RCLONE_DRIVE_CLIENT_ID", "env-client-id")
+    monkeypatch.setenv("RCLONE_DRIVE_CLIENT_SECRET", "env-client-secret")
+
+    config = app_main.drive_oauth_config()
+
+    assert config["configured"] is True
+    assert config["source"] == "environment"
+    assert config["client_id"] == "env-client-id"
+    assert config["client_secret"] == "env-client-secret"
+
+
+def test_run_drive_auth_command_updates_oauth_before_reconnect(monkeypatch) -> None:
+    calls = []
+    app_main.save_local_settings(
+        {
+            "rclone_drive_client_id": "client-id",
+            "rclone_drive_client_secret": "client-secret",
+        }
+    )
+
+    def fake_run(command, cwd, check):
+        calls.append(command)
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(app_main.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        app_main,
+        "local_drive_health",
+        lambda: {
+            "rclone_bin": "rclone",
+            "rclone_path": "rclone",
+            "remote_name": "gdrive",
+            "remote_configured": True,
+            "remote_accessible": True,
+            "ok": True,
+            "error": "",
+        },
+    )
+    app_main.update_drive_auth_state(running=True, command=[], error="", mode="reconnect")
+
+    app_main.run_drive_auth_command("reconnect", ["rclone", "config", "reconnect", "gdrive:"])
+
+    assert calls == [
+        [
+            "rclone",
+            "config",
+            "update",
+            "gdrive",
+            "scope",
+            "drive.readonly",
+            "config_is_local",
+            "true",
+            "client_id",
+            "client-id",
+            "client_secret",
+            "client-secret",
+        ],
+        ["rclone", "config", "reconnect", "gdrive:"],
     ]
 
 

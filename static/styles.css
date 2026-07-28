@@ -926,6 +926,11 @@ textarea {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.summary-grid.compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 14px;
+}
+
 .summary-grid div {
   background: var(--surface-soft);
   border: 1px solid #e4e9f0;
@@ -964,6 +969,13 @@ textarea {
 .notice {
   margin-bottom: 16px;
   padding: 12px 14px;
+}
+
+.warning-block {
+  background: #fff7e6;
+  border: 1px solid #f0cf8a;
+  border-radius: var(--radius);
+  color: var(--warn);
 }
 
 .order-list {
@@ -1421,6 +1433,33 @@ textarea {
   border-radius: var(--radius);
   margin-bottom: 20px;
   padding: 18px;
+}
+
+.settings-form {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 14px;
+}
+
+.settings-form label {
+  color: var(--text);
+  display: grid;
+  font-size: 13px;
+  font-weight: 700;
+  gap: 6px;
+}
+
+.settings-form .actions {
+  align-items: end;
+  display: flex;
+  gap: 10px;
+  grid-column: 1 / -1;
+}
+
+.inline-form {
+  display: inline-flex;
+  margin-top: 10px;
 }
 
 .command-block {

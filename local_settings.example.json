@@ -1,0 +1,4 @@
+{
+  "rclone_drive_client_id": "YOUR_GOOGLE_DESKTOP_CLIENT_ID",
+  "rclone_drive_client_secret": "YOUR_GOOGLE_DESKTOP_CLIENT_SECRET"
+}
