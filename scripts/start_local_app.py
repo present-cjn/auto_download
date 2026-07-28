@@ -9,7 +9,8 @@ import time
 import traceback
 import webbrowser
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.error import HTTPError
+from urllib.request import ProxyHandler, build_opener
 
 
 if getattr(sys, "frozen", False):
@@ -34,13 +35,27 @@ def choose_port(host: str, preferred_port: int) -> int:
 
 
 def wait_for_health(url: str, timeout_seconds: int = 30) -> bool:
+    opener = build_opener(ProxyHandler({}))
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         try:
-            with urlopen(url, timeout=1) as response:
-                return response.status == 200
+            with opener.open(f"{url}/health", timeout=1) as response:
+                if 200 <= response.status < 400:
+                    return True
+        except HTTPError as exc:
+            if 200 <= exc.code < 400:
+                return True
         except OSError:
-            time.sleep(0.5)
+            try:
+                with opener.open(url, timeout=1) as response:
+                    if 200 <= response.status < 400:
+                        return True
+            except HTTPError as exc:
+                if 200 <= exc.code < 400:
+                    return True
+            except OSError:
+                pass
+        time.sleep(0.5)
     return False
 
 
@@ -63,7 +78,7 @@ def run_packaged_server(host: str, port: int, env: dict[str, str]) -> int:
     thread.start()
 
     url = f"http://{host}:{port}"
-    if wait_for_health(f"{url}/health"):
+    if wait_for_health(url):
         webbrowser.open(url)
         print(f"Auto Download is running at {url}")
         print("Close this window to stop the local app.")
@@ -104,7 +119,7 @@ def main() -> int:
     ]
     process = subprocess.Popen(command, cwd=ROOT, env=env)
     try:
-        if wait_for_health(f"{url}/health"):
+        if wait_for_health(url):
             webbrowser.open(url)
             print(f"Auto Download is running at {url}")
             print("Close this window to stop the local app.")

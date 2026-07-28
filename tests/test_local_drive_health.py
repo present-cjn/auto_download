@@ -5,13 +5,17 @@ from pathlib import Path
 import pytest
 
 from app import main as app_main
+from app.core import downloader
 
 
 @pytest.fixture(autouse=True)
 def isolated_local_settings(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(app_main, "LOCAL_SETTINGS_PATH", tmp_path / "local_settings.json")
+    monkeypatch.setattr("app.core.downloader.LOCAL_SETTINGS_PATH", tmp_path / "local_settings.json")
     monkeypatch.delenv("RCLONE_DRIVE_CLIENT_ID", raising=False)
     monkeypatch.delenv("RCLONE_DRIVE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("HTTP_PROXY", raising=False)
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
 
 
 def test_local_drive_health_reports_missing_rclone(monkeypatch) -> None:
@@ -133,17 +137,58 @@ def test_drive_oauth_config_prefers_environment(monkeypatch) -> None:
     assert config["client_secret"] == "env-client-secret"
 
 
+def test_rclone_proxy_config_defaults_to_local_7890() -> None:
+    config = downloader.rclone_proxy_config()
+
+    assert config["enabled"] is True
+    assert config["url"] == "http://127.0.0.1:7890"
+    assert config["source"] == "local_settings"
+
+
+def test_rclone_proxy_config_reads_local_settings() -> None:
+    app_main.save_proxy_settings(True, "socks5://127.0.0.1:7891")
+
+    config = downloader.rclone_proxy_config()
+
+    assert config["enabled"] is True
+    assert config["url"] == "socks5://127.0.0.1:7891"
+
+
+def test_rclone_proxy_config_prefers_environment(monkeypatch) -> None:
+    app_main.save_proxy_settings(True, "http://127.0.0.1:7891")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:8888")
+
+    config = downloader.rclone_proxy_config()
+
+    assert config["enabled"] is True
+    assert config["url"] == "http://127.0.0.1:8888"
+    assert config["source"] == "environment"
+
+
+def test_rclone_subprocess_env_includes_proxy() -> None:
+    app_main.save_proxy_settings(True, "http://127.0.0.1:7892")
+
+    env = downloader.rclone_subprocess_env()
+
+    assert env["HTTP_PROXY"] == "http://127.0.0.1:7892"
+    assert env["HTTPS_PROXY"] == "http://127.0.0.1:7892"
+    assert "127.0.0.1" in env["NO_PROXY"]
+
+
 def test_run_drive_auth_command_updates_oauth_before_reconnect(monkeypatch) -> None:
     calls = []
+    envs = []
     app_main.save_local_settings(
         {
             "rclone_drive_client_id": "client-id",
             "rclone_drive_client_secret": "client-secret",
         }
     )
+    app_main.save_proxy_settings(True, "http://127.0.0.1:7892")
 
-    def fake_run(command, cwd, check):
+    def fake_run(command, cwd, check, **kwargs):
         calls.append(command)
+        envs.append(kwargs.get("env"))
 
         class Result:
             returncode = 0
@@ -185,6 +230,7 @@ def test_run_drive_auth_command_updates_oauth_before_reconnect(monkeypatch) -> N
         ],
         ["rclone", "config", "reconnect", "gdrive:"],
     ]
+    assert all(env["HTTPS_PROXY"] == "http://127.0.0.1:7892" for env in envs)
 
 
 def test_run_drive_auth_command_reconnects_after_empty_token(monkeypatch) -> None:
@@ -210,7 +256,7 @@ def test_run_drive_auth_command_reconnects_after_empty_token(monkeypatch) -> Non
         },
     ]
 
-    def fake_run(command, cwd, check):
+    def fake_run(command, cwd, check, **kwargs):
         calls.append(command)
 
         class Result:

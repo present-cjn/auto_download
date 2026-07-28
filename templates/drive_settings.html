@@ -27,6 +27,7 @@
     <div><span>{{ "已配置" if health.remote_configured else "未配置" }}</span><label>授权配置</label></div>
     <div><span>{{ "可访问" if health.remote_accessible else "不可访问" }}</span><label>Drive 访问</label></div>
     <div><span>{{ "公司 Client" if health.oauth_client_configured else "共享 Client" }}</span><label>OAuth</label></div>
+    <div><span>{{ "已启用" if health.proxy_enabled else "未启用" }}</span><label>代理</label></div>
   </div>
   {% if health.warning %}
   <div class="notice warning-block">{{ health.warning }}</div>
@@ -71,6 +72,49 @@
     <span>保存后请重新登录 Google Drive。</span>
     <span>如果使用环境变量配置，本页不会覆盖环境变量。</span>
     <span>client_secret 不会在页面明文回显。</span>
+  </div>
+</section>
+
+<section class="settings-panel">
+  <div class="section-heading">
+    <h2>网络代理</h2>
+    <p>用于 rclone.exe 访问 Google OAuth 和 Drive API。Chrome 插件代理不会自动作用到 rclone。</p>
+  </div>
+  <div class="summary-grid compact">
+    <div><span>{{ "已启用" if proxy_config.enabled else "未启用" }}</span><label>状态</label></div>
+    <div><span>{{ proxy_config.source_label }}</span><label>来源</label></div>
+    <div><span>{{ proxy_config.url or "-" }}</span><label>代理地址</label></div>
+  </div>
+  {% if proxy_test %}
+    {% if proxy_test.ok %}
+    <div class="notice">代理测试成功，Google OAuth token 地址可达。HTTP 状态：{{ proxy_test.status }}</div>
+    {% else %}
+    <div class="notice error-block">代理测试失败：{{ proxy_test.error }}</div>
+    {% endif %}
+  {% endif %}
+  <form class="settings-form" method="post" action="/settings/drive/proxy">
+    <label>
+      代理地址
+      <input type="text" name="proxy_url" autocomplete="off" value="{{ proxy_config.url or 'http://127.0.0.1:7890' }}" placeholder="http://127.0.0.1:7890">
+    </label>
+    <label>
+      状态
+      <select name="proxy_enabled">
+        <option value="1" {% if proxy_config.enabled %}selected{% endif %}>启用</option>
+        <option value="0" {% if not proxy_config.enabled %}selected{% endif %}>停用</option>
+      </select>
+    </label>
+    <div class="actions">
+      <button class="button primary" type="submit" {% if proxy_config.source == "environment" %}disabled{% endif %}>保存代理</button>
+    </div>
+  </form>
+  <form class="inline-form" method="post" action="/settings/drive/proxy/test">
+    <button class="button subtle" type="submit">测试代理</button>
+  </form>
+  <div class="warning-list">
+    <span>默认地址为 http://127.0.0.1:7890。</span>
+    <span>SOCKS5 可填写 socks5://127.0.0.1:7890。</span>
+    <span>环境变量代理优先于页面配置。</span>
   </div>
 </section>
 

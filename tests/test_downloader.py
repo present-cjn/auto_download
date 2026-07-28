@@ -360,7 +360,7 @@ def test_download_drive_file_by_id_reports_attempt_details(tmp_path: Path, monke
 def test_rclone_folder_download_uses_conservative_defaults(tmp_path: Path, monkeypatch) -> None:
     calls = []
 
-    def fake_run(command, check, capture_output, text, timeout=None):
+    def fake_run(command, check, capture_output, text, timeout=None, env=None):
         calls.append(command)
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
@@ -429,7 +429,7 @@ def test_rclone_bin_uses_pyinstaller_resource_root(tmp_path: Path, monkeypatch) 
 def test_rclone_file_download_uses_copyid_directory_target(tmp_path: Path, monkeypatch) -> None:
     calls = []
 
-    def fake_run(command, check, capture_output, text, timeout=None):
+    def fake_run(command, check, capture_output, text, timeout=None, env=None):
         calls.append(command)
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
@@ -461,7 +461,7 @@ def test_rclone_file_download_uses_copyid_directory_target(tmp_path: Path, monke
 def test_rclone_remote_pool_retries_rate_limit_on_next_remote(tmp_path: Path, monkeypatch) -> None:
     calls = []
 
-    def fake_run(command, check, capture_output, text, timeout=None):
+    def fake_run(command, check, capture_output, text, timeout=None, env=None):
         calls.append(command)
         if len(calls) == 1:
             return subprocess.CompletedProcess(command, 1, stdout="", stderr="rateLimitExceeded")
@@ -479,7 +479,7 @@ def test_rclone_remote_pool_retries_rate_limit_on_next_remote(tmp_path: Path, mo
 def test_rclone_remote_pool_stops_on_permission_error(tmp_path: Path, monkeypatch) -> None:
     calls = []
 
-    def fake_run(command, check, capture_output, text, timeout=None):
+    def fake_run(command, check, capture_output, text, timeout=None, env=None):
         calls.append(command)
         return subprocess.CompletedProcess(command, 1, stdout="", stderr="permission denied")
 
@@ -538,7 +538,7 @@ def test_cached_drive_file_adds_extension_to_downloaded_image(tmp_path: Path, mo
 def test_open_id_folder_resolves_with_rclone_folder_probe(tmp_path: Path, monkeypatch) -> None:
     commands = []
 
-    def fake_run(command, check, capture_output, text, timeout=None):
+    def fake_run(command, check, capture_output, text, timeout=None, env=None):
         commands.append(command)
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
@@ -575,7 +575,7 @@ def test_open_id_folder_resolves_with_rclone_folder_probe(tmp_path: Path, monkey
 
 
 def test_open_id_file_resolves_with_rclone_folder_probe(tmp_path: Path, monkeypatch) -> None:
-    def fake_run(command, check, capture_output, text, timeout=None):
+    def fake_run(command, check, capture_output, text, timeout=None, env=None):
         return subprocess.CompletedProcess(
             command,
             1,

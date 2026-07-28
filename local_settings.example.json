@@ -1,4 +1,6 @@
 {
   "rclone_drive_client_id": "YOUR_GOOGLE_DESKTOP_CLIENT_ID",
-  "rclone_drive_client_secret": "YOUR_GOOGLE_DESKTOP_CLIENT_SECRET"
+  "rclone_drive_client_secret": "YOUR_GOOGLE_DESKTOP_CLIENT_SECRET",
+  "proxy_enabled": true,
+  "proxy_url": "http://127.0.0.1:7890"
 }

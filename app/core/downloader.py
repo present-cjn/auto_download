@@ -38,6 +38,8 @@ DEFAULT_RCLONE_CHECKERS = "1"
 DEFAULT_RCLONE_DRIVE_PACER_MIN_SLEEP = "500ms"
 DEFAULT_RCLONE_DRIVE_PACER_BURST = "5"
 DEFAULT_RCLONE_LOCAL_ENCODING = "Slash,LtGt,DoubleQuote,Colon,Question,Asterisk,Pipe,BackSlash,Del,Ctl,InvalidUtf8,Dot"
+LOCAL_SETTINGS_PATH = Path("data/local_settings.json")
+DEFAULT_PROXY_URL = "http://127.0.0.1:7890"
 DEFAULT_PRINTERVAL_CURL_TIMEOUT_SECONDS = 30
 DEFAULT_PRINTERVAL_IMAGE_TIMEOUT_BUDGET_SECONDS = 90
 DEFAULT_PRINTERVAL_PLAYWRIGHT_TIMEOUT_SECONDS = 120
@@ -735,6 +737,45 @@ def rclone_bin() -> str:
 
 def printerval_curl_bin() -> str:
     return os.getenv("PRINTERVAL_CURL_BIN", "curl").strip() or "curl"
+
+
+def load_local_settings() -> dict:
+    try:
+        with LOCAL_SETTINGS_PATH.open("r", encoding="utf-8") as file:
+            value = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def rclone_proxy_config() -> dict:
+    settings = load_local_settings()
+    env_proxy = os.getenv("HTTPS_PROXY", "").strip() or os.getenv("HTTP_PROXY", "").strip()
+    if env_proxy:
+        return {
+            "enabled": True,
+            "url": env_proxy,
+            "source": "environment",
+            "source_label": "环境变量",
+        }
+    enabled = settings.get("proxy_enabled", True)
+    url = str(settings.get("proxy_url") or DEFAULT_PROXY_URL).strip()
+    return {
+        "enabled": bool(enabled),
+        "url": url,
+        "source": "local_settings",
+        "source_label": "本地配置",
+    }
+
+
+def rclone_subprocess_env() -> dict[str, str]:
+    env = {**os.environ}
+    config = rclone_proxy_config()
+    if config["enabled"] and config["url"]:
+        env["HTTP_PROXY"] = config["url"]
+        env["HTTPS_PROXY"] = config["url"]
+        env["NO_PROXY"] = env.get("NO_PROXY", "127.0.0.1,localhost")
+    return env
 
 
 def rclone_drive_remotes() -> list[str]:
@@ -2106,6 +2147,7 @@ def run_rclone_command(
             command,
             check=False,
             capture_output=True,
+            env=rclone_subprocess_env(),
             text=True,
             timeout=timeout_seconds,
         )

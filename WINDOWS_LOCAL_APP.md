@@ -58,6 +58,34 @@ copy local_settings.example.json data\local_settings.json
 
 然后编辑 `data\local_settings.json`，填入真实值。真实配置文件只保存在本机，不要提交 Git。
 
+## 准备网络代理
+
+如果当前网络访问 Google 需要代理，只配置 Chrome 插件代理通常不够。浏览器登录页会走 Chrome，但 `rclone.exe` 还需要自己访问：
+
+```text
+https://oauth2.googleapis.com/token
+```
+
+应用支持在“Drive 设置”里配置 rclone 代理，默认值为：
+
+```text
+http://127.0.0.1:7890
+```
+
+如果你的代理软件使用其他端口，或使用 SOCKS5，可以在页面改成类似：
+
+```text
+socks5://127.0.0.1:7890
+```
+
+也可以继续通过终端环境变量设置代理。环境变量优先于页面配置：
+
+```bat
+set HTTP_PROXY=http://127.0.0.1:7890
+set HTTPS_PROXY=http://127.0.0.1:7890
+dist\AutoDownload\AutoDownload.exe
+```
+
 ## 本地开发启动
 
 ```bat
@@ -97,9 +125,10 @@ python -m venv .venv
 2. 登录本地系统账号。
 3. 打开“Drive 设置”。
 4. 确认“公司 OAuth Client”为“已配置”。
-5. 点击“登录 Google Drive”。
-6. 浏览器打开后，登录能访问设计图的 Google 账号并允许只读权限。
-7. 回到“Drive 设置”，确认 Drive 访问为“可访问”。
+5. 在“网络代理”里确认代理地址，并点击“测试代理”。
+6. 点击“登录 Google Drive”。
+7. 浏览器打开后，登录能访问设计图的 Google 账号并允许只读权限。
+8. 回到“Drive 设置”，确认 Drive 访问为“可访问”。
 
 如果之前已经创建过失败的 `gdrive` remote，可以在“Drive 设置”点击“重建 Drive 登录”，然后重新登录。重建只删除本机 rclone remote，不会删除 Google Drive 文件。
 
@@ -133,6 +162,7 @@ data\archives\
 - 在干净 Windows 电脑上启动 `AutoDownload.exe`。
 - Drive 设置页能识别内置 `vendor\rclone\rclone.exe`。
 - Drive 设置页显示公司 OAuth client 已配置。
+- Drive 设置页代理测试成功。
 - 未授权时能显示明确错误。
 - 完成 `gdrive` 授权后显示可访问。
 - 上传小批量 Excel 后能完成下载、失败重试和 ZIP 生成。

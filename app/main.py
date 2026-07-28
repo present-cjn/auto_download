@@ -12,6 +12,8 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+from urllib.error import HTTPError
+from urllib.request import ProxyHandler, Request as UrlRequest, build_opener
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
@@ -22,9 +24,12 @@ from app.core import database as db
 from app.core.downloader import ERROR_LABELS, parse_drive_resource, safe_filename
 from app.core.downloader import (
     drive_download_backend,
+    DEFAULT_PROXY_URL,
     rclone_bin,
     rclone_drive_remotes,
+    rclone_proxy_config,
     rclone_search_locations,
+    rclone_subprocess_env,
 )
 from app.core.excel_parser import build_import_summary
 from app.core.security import (
@@ -796,6 +801,7 @@ def local_drive_health(timeout_seconds: int = 15) -> dict[str, Any]:
     backend = drive_download_backend()
     configured_bin = rclone_bin()
     oauth_config = drive_oauth_config()
+    proxy_config = rclone_proxy_config()
     configured_path = Path(configured_bin)
     resolved_bin = (
         str(configured_path)
@@ -815,6 +821,10 @@ def local_drive_health(timeout_seconds: int = 15) -> dict[str, Any]:
         "oauth_client_configured": oauth_config["configured"],
         "oauth_client_source": oauth_config["source"],
         "oauth_client_id": oauth_config["client_id_masked"],
+        "proxy_enabled": proxy_config["enabled"],
+        "proxy_url": proxy_config["url"],
+        "proxy_source": proxy_config["source"],
+        "proxy_source_label": proxy_config["source_label"],
         "ok": False,
         "error": "",
         "warning": "" if oauth_config["configured"] else "当前未配置公司 Google OAuth client，会回退使用 rclone 共享 client；该共享 client 在 2026 年有中断风险。",
@@ -831,6 +841,7 @@ def local_drive_health(timeout_seconds: int = 15) -> dict[str, Any]:
         remotes_result = subprocess.run(
             [resolved_bin, "listremotes"],
             capture_output=True,
+            env=rclone_subprocess_env(),
             text=True,
             timeout=timeout_seconds,
             check=False,
@@ -854,6 +865,7 @@ def local_drive_health(timeout_seconds: int = 15) -> dict[str, Any]:
         about_result = subprocess.run(
             [resolved_bin, "about", f"{primary_remote}:"],
             capture_output=True,
+            env=rclone_subprocess_env(),
             text=True,
             timeout=timeout_seconds,
             check=False,
@@ -933,6 +945,43 @@ def drive_oauth_config() -> dict[str, Any]:
     }
 
 
+def save_proxy_settings(enabled: bool, proxy_url: str) -> None:
+    settings = load_local_settings()
+    settings["proxy_enabled"] = enabled
+    settings["proxy_url"] = proxy_url.strip() or DEFAULT_PROXY_URL
+    save_local_settings(settings)
+
+
+def test_proxy_connection(timeout_seconds: int = 10) -> dict[str, Any]:
+    proxy_config = rclone_proxy_config()
+    proxy_url = proxy_config["url"] if proxy_config["enabled"] else ""
+    handlers = [ProxyHandler({"http": proxy_url, "https": proxy_url})] if proxy_url else [ProxyHandler({})]
+    opener = build_opener(*handlers)
+    request = UrlRequest("https://oauth2.googleapis.com/token", method="GET")
+    try:
+        with opener.open(request, timeout=timeout_seconds) as response:
+            return {
+                "ok": True,
+                "status": response.status,
+                "error": "",
+                "proxy": proxy_config,
+            }
+    except HTTPError as exc:
+        return {
+            "ok": True,
+            "status": exc.code,
+            "error": "",
+            "proxy": proxy_config,
+        }
+    except OSError as exc:
+        return {
+            "ok": False,
+            "status": 0,
+            "error": str(exc),
+            "proxy": proxy_config,
+        }
+
+
 def rclone_drive_oauth_config_options() -> list[str]:
     options = [
         "scope",
@@ -1004,7 +1053,7 @@ def run_drive_auth_command(mode: str, command: list[str]) -> None:
         update_command = rclone_update_command(rclone_exe, remote_name)
         update_drive_auth_state(command=update_command, mode="update")
         try:
-            completed = subprocess.run(update_command, cwd=Path.cwd(), check=False)
+            completed = subprocess.run(update_command, cwd=Path.cwd(), env=rclone_subprocess_env(), check=False)
         except OSError as exc:
             update_drive_auth_state(
                 running=False,
@@ -1023,7 +1072,7 @@ def run_drive_auth_command(mode: str, command: list[str]) -> None:
             return
         update_drive_auth_state(command=command, mode="reconnect")
     try:
-        completed = subprocess.run(command, cwd=Path.cwd(), check=False)
+        completed = subprocess.run(command, cwd=Path.cwd(), env=rclone_subprocess_env(), check=False)
     except OSError as exc:
         update_drive_auth_state(
             running=False,
@@ -1039,7 +1088,7 @@ def run_drive_auth_command(mode: str, command: list[str]) -> None:
         reconnect_command = rclone_reconnect_command(str(rclone_exe), remote_name)
         update_drive_auth_state(command=reconnect_command, mode="reconnect")
         try:
-            completed = subprocess.run(reconnect_command, cwd=Path.cwd(), check=False)
+            completed = subprocess.run(reconnect_command, cwd=Path.cwd(), env=rclone_subprocess_env(), check=False)
         except OSError as exc:
             update_drive_auth_state(
                 running=False,
@@ -1106,6 +1155,7 @@ def reset_drive_remote(health: Optional[dict[str, Any]] = None) -> None:
             [health["rclone_path"], "config", "delete", remote_name],
             cwd=Path.cwd(),
             capture_output=True,
+            env=rclone_subprocess_env(),
             text=True,
             timeout=15,
             check=False,
@@ -1422,6 +1472,9 @@ def drive_settings_page(request: Request):
     user = require_user(request)
     health = local_drive_health()
     oauth_config = drive_oauth_config()
+    proxy_test = None
+    if request.query_params.get("proxy_test") == "1":
+        proxy_test = test_proxy_connection()
     return templates.TemplateResponse(
         request=request,
         name="drive_settings.html",
@@ -1430,6 +1483,8 @@ def drive_settings_page(request: Request):
             health=health,
             auth_state=drive_auth_state(),
             oauth_config=oauth_config,
+            proxy_config=rclone_proxy_config(),
+            proxy_test=proxy_test,
         ),
     )
 
@@ -1477,6 +1532,23 @@ def clear_drive_oauth_settings(request: Request):
     settings.pop("rclone_drive_client_secret", None)
     save_local_settings(settings)
     return RedirectResponse("/settings/drive", status_code=303)
+
+
+@app.post("/settings/drive/proxy")
+def save_drive_proxy_settings(
+    request: Request,
+    proxy_enabled: str = Form(""),
+    proxy_url: str = Form(DEFAULT_PROXY_URL),
+):
+    require_user(request)
+    save_proxy_settings(proxy_enabled == "1", proxy_url)
+    return RedirectResponse("/settings/drive", status_code=303)
+
+
+@app.post("/settings/drive/proxy/test")
+def test_drive_proxy(request: Request):
+    require_user(request)
+    return RedirectResponse("/settings/drive?proxy_test=1", status_code=303)
 
 
 @app.post("/settings/drive/reset")
