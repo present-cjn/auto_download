@@ -991,6 +991,11 @@ def should_retry_drive_auth_with_reconnect(health: dict[str, Any]) -> bool:
     )
 
 
+def has_empty_drive_token_error(health: dict[str, Any]) -> bool:
+    error = str(health.get("error") or "").lower()
+    return "empty token" in error and "config reconnect" in error
+
+
 def run_drive_auth_command(mode: str, command: list[str]) -> None:
     completed: subprocess.CompletedProcess[Any]
     if mode == "reconnect" and drive_oauth_config()["configured"] and len(command) >= 4:
@@ -1064,6 +1069,9 @@ def start_drive_auth() -> dict[str, Any]:
     state = drive_auth_state()
     if state["running"]:
         return state
+    if has_empty_drive_token_error(health):
+        reset_drive_remote(health)
+        health = local_drive_health(timeout_seconds=5)
     mode, command = rclone_auth_command(health)
     update_drive_auth_state(
         running=True,
@@ -1083,8 +1091,8 @@ def start_drive_auth() -> dict[str, Any]:
     return drive_auth_state()
 
 
-def reset_drive_remote() -> None:
-    health = local_drive_health(timeout_seconds=5)
+def reset_drive_remote(health: Optional[dict[str, Any]] = None) -> None:
+    health = health or local_drive_health(timeout_seconds=5)
     if not health["rclone_installed"]:
         raise HTTPException(status_code=400, detail=health["error"] or "未找到 rclone。")
     state = drive_auth_state()

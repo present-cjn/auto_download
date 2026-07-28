@@ -243,3 +243,64 @@ def test_run_drive_auth_command_reconnects_after_empty_token(monkeypatch) -> Non
     assert state["running"] is False
     assert state["returncode"] == 0
     assert state["error"] == ""
+
+
+def test_start_drive_auth_resets_empty_token_remote_before_create(monkeypatch) -> None:
+    reset_calls = []
+    commands = []
+    health_checks = [
+        {
+            "rclone_installed": True,
+            "rclone_bin": "rclone",
+            "rclone_path": "rclone",
+            "remote_name": "gdrive",
+            "remote_configured": True,
+            "remote_accessible": False,
+            "ok": False,
+            "error": "empty token found - please run \"rclone config reconnect gdrive:\"",
+        },
+        {
+            "rclone_installed": True,
+            "rclone_bin": "rclone",
+            "rclone_path": "rclone",
+            "remote_name": "gdrive",
+            "remote_configured": False,
+            "remote_accessible": False,
+            "ok": False,
+            "error": "rclone remote `gdrive` 尚未配置。",
+        },
+    ]
+
+    class FakeThread:
+        def __init__(self, target, args, daemon):
+            commands.append(args[1])
+
+        def start(self):
+            return None
+
+    def fake_reset(health=None):
+        reset_calls.append(health)
+
+    monkeypatch.setattr(app_main, "local_drive_health", lambda timeout_seconds=15: health_checks.pop(0))
+    monkeypatch.setattr(app_main, "reset_drive_remote", fake_reset)
+    monkeypatch.setattr(app_main.threading, "Thread", FakeThread)
+    app_main.update_drive_auth_state(running=False, command=[], error="", mode="")
+
+    state = app_main.start_drive_auth()
+
+    assert len(reset_calls) == 1
+    assert state["running"] is True
+    assert state["mode"] == "create"
+    assert commands == [
+        [
+            "rclone",
+            "config",
+            "create",
+            "gdrive",
+            "drive",
+            "scope",
+            "drive.readonly",
+            "config_is_local",
+            "true",
+        ]
+    ]
