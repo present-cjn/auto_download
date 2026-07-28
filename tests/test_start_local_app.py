@@ -46,3 +46,13 @@ def test_wait_for_health_accepts_local_redirect(monkeypatch) -> None:
 
     assert start_local_app.wait_for_health("http://127.0.0.1:8000") is True
     assert calls == ["http://127.0.0.1:8000/health", "http://127.0.0.1:8000"]
+
+
+def test_cli_calls_multiprocessing_freeze_support_before_main(monkeypatch) -> None:
+    calls = []
+
+    monkeypatch.setattr(start_local_app.multiprocessing, "freeze_support", lambda: calls.append("freeze"))
+    monkeypatch.setattr(start_local_app, "main", lambda: calls.append("main") or 0)
+
+    assert start_local_app.cli() == 0
+    assert calls == ["freeze", "main"]

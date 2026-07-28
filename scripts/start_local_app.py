@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import multiprocessing
 import socket
 import subprocess
 import sys
@@ -140,9 +141,14 @@ def write_startup_error(exc: BaseException) -> Path:
     return log_path
 
 
+def cli() -> int:
+    multiprocessing.freeze_support()
+    return main()
+
+
 if __name__ == "__main__":
     try:
-        exit_code = main()
+        exit_code = cli()
     except Exception as exc:
         log_path = write_startup_error(exc)
         print("Auto Download failed to start.", file=sys.stderr)

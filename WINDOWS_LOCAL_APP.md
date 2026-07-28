@@ -175,6 +175,10 @@ startup-error.log
 
 优先查看这个文件，它会记录完整 Python traceback。
 
+如果点击“开始本机下载”后终端里又出现新的 `Uvicorn running on http://127.0.0.1:8001`
+或 `8002`，说明下载子进程错误地重新启动了整个 exe。请先 `git pull`，再重新运行
+`build_windows_app.bat` 打包。
+
 ## 发布包应包含
 
 ```text
