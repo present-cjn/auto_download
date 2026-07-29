@@ -23,15 +23,29 @@ from fastapi.templating import Jinja2Templates
 from app.core import database as db
 from app.core.downloader import ERROR_LABELS, parse_drive_resource, safe_filename
 from app.core.downloader import (
+    DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
+    DEFAULT_MAX_IMAGE_FILE_SIZE_MB,
+    DEFAULT_MIN_FREE_DISK_SPACE_MB,
+    DEFAULT_PRINTERVAL_CURL_TIMEOUT_SECONDS,
+    DEFAULT_PRINTERVAL_PLAYWRIGHT_TIMEOUT_SECONDS,
     drive_download_backend,
+    drive_download_timeout_seconds,
     DEFAULT_PROXY_URL,
+    max_image_file_size_mb,
+    min_free_disk_space_mb,
+    printerval_curl_timeout_seconds,
+    printerval_playwright_enabled,
+    printerval_playwright_timeout_seconds,
     rclone_bin,
+    rclone_checkers,
     rclone_drive_remotes,
     rclone_proxy_config,
     rclone_search_locations,
     rclone_subprocess_env,
+    rclone_transfers,
 )
 from app.core.excel_parser import build_import_summary
+from app.core.local_settings import env_or_setting, load_local_settings, save_local_settings
 from app.core.security import (
     hash_password,
     new_session_token,
@@ -41,6 +55,8 @@ from app.core.security import (
 )
 from app.core.tasks import (
     ARCHIVES_DIR,
+    configured_download_delay_seconds,
+    configured_retry_backoff_seconds,
     ensure_data_dirs,
     mark_download_item_manual_done,
     process_batch,
@@ -76,7 +92,6 @@ app.mount("/static", StaticFiles(directory=str(resource_path("static"))), name="
 
 SESSION_COOKIE = "app_session"
 RESOURCES_DIR = Path("data/resources")
-LOCAL_SETTINGS_PATH = Path("data/local_settings.json")
 VALID_ROLES = {"developer", "admin", "operator"}
 ROLE_LABELS = {
     "developer": "开发者",
@@ -894,22 +909,6 @@ def update_drive_auth_state(**patch: Any) -> None:
         DRIVE_AUTH_STATE.update(patch)
 
 
-def load_local_settings() -> dict[str, Any]:
-    try:
-        with LOCAL_SETTINGS_PATH.open("r", encoding="utf-8") as file:
-            value = json.load(file)
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return value if isinstance(value, dict) else {}
-
-
-def save_local_settings(settings: dict[str, Any]) -> None:
-    LOCAL_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with LOCAL_SETTINGS_PATH.open("w", encoding="utf-8") as file:
-        json.dump(settings, file, ensure_ascii=False, indent=2)
-        file.write("\n")
-
-
 def masked_secret(value: str) -> str:
     if not value:
         return ""
@@ -980,6 +979,164 @@ def test_proxy_connection(timeout_seconds: int = 10) -> dict[str, Any]:
             "error": str(exc),
             "proxy": proxy_config,
         }
+
+
+DOWNLOAD_SETTING_KEYS = {
+    "drive_download_timeout_seconds",
+    "drive_item_retry_backoff_seconds",
+    "drive_download_delay_seconds",
+    "max_image_file_size_mb",
+    "min_free_disk_space_mb",
+    "rclone_transfers",
+    "rclone_checkers",
+    "printerval_curl_timeout_seconds",
+    "printerval_playwright_timeout_seconds",
+    "printerval_playwright_enabled",
+}
+
+
+def download_settings_context() -> dict[str, Any]:
+    values = {
+        "drive_download_timeout_seconds": drive_download_timeout_seconds(),
+        "drive_item_retry_backoff_seconds": ",".join(str(value) for value in configured_retry_backoff_seconds()),
+        "drive_download_delay_seconds": configured_download_delay_seconds(),
+        "max_image_file_size_mb": max_image_file_size_mb(),
+        "min_free_disk_space_mb": min_free_disk_space_mb(),
+        "rclone_transfers": rclone_transfers(),
+        "rclone_checkers": rclone_checkers(),
+        "printerval_curl_timeout_seconds": printerval_curl_timeout_seconds(),
+        "printerval_playwright_timeout_seconds": printerval_playwright_timeout_seconds(),
+        "printerval_playwright_enabled": printerval_playwright_enabled(),
+    }
+    sources = {
+        "drive_download_timeout_seconds": env_or_setting(
+            os.getenv("DRIVE_DOWNLOAD_TIMEOUT_SECONDS", ""),
+            "drive_download_timeout_seconds",
+            DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
+        )[1],
+        "drive_item_retry_backoff_seconds": env_or_setting(
+            os.getenv("DRIVE_ITEM_RETRY_BACKOFF_SECONDS", ""),
+            "drive_item_retry_backoff_seconds",
+            "30,90",
+        )[1],
+        "drive_download_delay_seconds": env_or_setting(
+            os.getenv("DRIVE_DOWNLOAD_DELAY_SECONDS", ""),
+            "drive_download_delay_seconds",
+            8,
+        )[1],
+        "max_image_file_size_mb": env_or_setting(
+            os.getenv("MAX_IMAGE_FILE_SIZE_MB", ""),
+            "max_image_file_size_mb",
+            DEFAULT_MAX_IMAGE_FILE_SIZE_MB,
+        )[1],
+        "min_free_disk_space_mb": env_or_setting(
+            os.getenv("MIN_FREE_DISK_SPACE_MB", ""),
+            "min_free_disk_space_mb",
+            DEFAULT_MIN_FREE_DISK_SPACE_MB,
+        )[1],
+        "rclone_transfers": env_or_setting(os.getenv("RCLONE_TRANSFERS", ""), "rclone_transfers", "1")[1],
+        "rclone_checkers": env_or_setting(os.getenv("RCLONE_CHECKERS", ""), "rclone_checkers", "1")[1],
+        "printerval_curl_timeout_seconds": env_or_setting(
+            os.getenv("PRINTERVAL_CURL_TIMEOUT_SECONDS", ""),
+            "printerval_curl_timeout_seconds",
+            DEFAULT_PRINTERVAL_CURL_TIMEOUT_SECONDS,
+        )[1],
+        "printerval_playwright_timeout_seconds": env_or_setting(
+            os.getenv("PRINTERVAL_PLAYWRIGHT_TIMEOUT_SECONDS", ""),
+            "printerval_playwright_timeout_seconds",
+            DEFAULT_PRINTERVAL_PLAYWRIGHT_TIMEOUT_SECONDS,
+        )[1],
+        "printerval_playwright_enabled": env_or_setting(
+            os.getenv("PRINTERVAL_PLAYWRIGHT_ENABLED", ""),
+            "printerval_playwright_enabled",
+            True,
+        )[1],
+    }
+    source_labels = {
+        "environment": "环境变量",
+        "local_settings": "本地配置",
+        "default": "默认值",
+    }
+    return {
+        "values": values,
+        "sources": sources,
+        "source_labels": source_labels,
+    }
+
+
+def normalized_positive_int(value: str, default: int, minimum: int = 1) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, parsed)
+
+
+def normalized_backoffs(value: str) -> str:
+    parts = []
+    for part in str(value).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            parsed = int(part)
+        except ValueError:
+            continue
+        if parsed >= 0:
+            parts.append(str(parsed))
+    return ",".join(parts) if parts else "30,90"
+
+
+def save_download_settings(form: dict[str, Any]) -> None:
+    settings = load_local_settings()
+    settings.update(
+        {
+            "drive_download_timeout_seconds": normalized_positive_int(
+                str(form.get("drive_download_timeout_seconds", "")),
+                DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
+            ),
+            "drive_item_retry_backoff_seconds": normalized_backoffs(
+                str(form.get("drive_item_retry_backoff_seconds", ""))
+            ),
+            "drive_download_delay_seconds": normalized_positive_int(
+                str(form.get("drive_download_delay_seconds", "")),
+                8,
+                0,
+            ),
+            "max_image_file_size_mb": normalized_positive_int(
+                str(form.get("max_image_file_size_mb", "")),
+                DEFAULT_MAX_IMAGE_FILE_SIZE_MB,
+            ),
+            "min_free_disk_space_mb": normalized_positive_int(
+                str(form.get("min_free_disk_space_mb", "")),
+                DEFAULT_MIN_FREE_DISK_SPACE_MB,
+                0,
+            ),
+            "rclone_transfers": str(
+                normalized_positive_int(str(form.get("rclone_transfers", "")), 1)
+            ),
+            "rclone_checkers": str(
+                normalized_positive_int(str(form.get("rclone_checkers", "")), 1)
+            ),
+            "printerval_curl_timeout_seconds": normalized_positive_int(
+                str(form.get("printerval_curl_timeout_seconds", "")),
+                DEFAULT_PRINTERVAL_CURL_TIMEOUT_SECONDS,
+            ),
+            "printerval_playwright_timeout_seconds": normalized_positive_int(
+                str(form.get("printerval_playwright_timeout_seconds", "")),
+                DEFAULT_PRINTERVAL_PLAYWRIGHT_TIMEOUT_SECONDS,
+            ),
+            "printerval_playwright_enabled": str(form.get("printerval_playwright_enabled", "0")) == "1",
+        }
+    )
+    save_local_settings(settings)
+
+
+def reset_download_settings() -> None:
+    settings = load_local_settings()
+    for key in DOWNLOAD_SETTING_KEYS:
+        settings.pop(key, None)
+    save_local_settings(settings)
 
 
 def rclone_drive_oauth_config_options() -> list[str]:
@@ -1556,6 +1713,31 @@ def reset_drive_login(request: Request):
     require_user(request)
     reset_drive_remote()
     return RedirectResponse("/settings/drive", status_code=303)
+
+
+@app.get("/settings/download")
+def download_settings_page(request: Request):
+    user = require_user(request)
+    return templates.TemplateResponse(
+        request=request,
+        name="download_settings.html",
+        context=template_context(user, download_settings=download_settings_context()),
+    )
+
+
+@app.post("/settings/download")
+async def update_download_settings(request: Request):
+    require_user(request)
+    form = await request.form()
+    save_download_settings(dict(form))
+    return RedirectResponse("/settings/download", status_code=303)
+
+
+@app.post("/settings/download/reset")
+def reset_download_settings_page(request: Request):
+    require_user(request)
+    reset_download_settings()
+    return RedirectResponse("/settings/download", status_code=303)
 
 
 @app.post("/quota")

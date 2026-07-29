@@ -5,6 +5,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from app.core import database as db
+from app.core import local_settings
 from app.core.excel_parser import OrderItemRow
 from app.core.downloader import DriveDownloadError, DriveDownloadTimeout
 from app.core.tasks import (
@@ -519,6 +520,7 @@ def test_server_download_pause_stops_after_current_item_and_can_continue(tmp_pat
 
 
 def test_download_config_parsing(monkeypatch) -> None:
+    monkeypatch.setattr(local_settings, "LOCAL_SETTINGS_PATH", Path("/tmp/missing-local-settings.json"))
     monkeypatch.setenv("DRIVE_DOWNLOAD_DELAY_SECONDS", "12")
     monkeypatch.setenv("DRIVE_ITEM_RETRY_BACKOFF_SECONDS", "1, 2, bad, 0")
 
@@ -530,6 +532,19 @@ def test_download_config_parsing(monkeypatch) -> None:
 
     assert configured_download_delay_seconds() == 8
     assert configured_retry_backoff_seconds() == [30, 90]
+
+
+def test_download_config_reads_local_settings(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(local_settings, "LOCAL_SETTINGS_PATH", tmp_path / "local_settings.json")
+    local_settings.save_local_settings(
+        {
+            "drive_download_delay_seconds": 5,
+            "drive_item_retry_backoff_seconds": "2,4,bad",
+        }
+    )
+
+    assert configured_download_delay_seconds() == 5
+    assert configured_retry_backoff_seconds() == [2, 4]
 
 
 def test_rate_limited_download_retries_and_succeeds(tmp_path: Path, monkeypatch) -> None:

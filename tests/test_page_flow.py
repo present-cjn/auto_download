@@ -6,6 +6,7 @@ import pytest
 
 from app import main as app_main
 from app.core import database as db
+from app.core import local_settings
 from app.core.excel_parser import OrderItemRow
 from app.core.security import hash_password, new_session_token, session_expiry_string
 
@@ -95,6 +96,23 @@ def test_batch_and_stats_pages_require_login(tmp_path: Path) -> None:
         assert getattr(batches_exc.value, "headers")["Location"] == "/login"
         assert getattr(stats_exc.value, "status_code") == 303
         assert getattr(stats_exc.value, "headers")["Location"] == "/login"
+    finally:
+        db.DB_PATH = original_path
+
+
+def test_download_settings_page_requires_login_and_renders(tmp_path: Path, monkeypatch) -> None:
+    original_path = with_temp_db(tmp_path / "app.db")
+    monkeypatch.setattr(local_settings, "LOCAL_SETTINGS_PATH", tmp_path / "local_settings.json")
+    try:
+        with pytest.raises(Exception) as settings_exc:
+            app_main.download_settings_page(FakeRequest())
+
+        _user_id, token = create_user_session("op", "operator")
+        page = app_main.download_settings_page(FakeRequest(token))
+
+        assert getattr(settings_exc.value, "status_code") == 303
+        assert page.template.name == "download_settings.html"
+        assert page.context["download_settings"]["values"]["drive_download_timeout_seconds"] >= 1
     finally:
         db.DB_PATH = original_path
 
@@ -299,3 +317,44 @@ def test_quota_navigation_is_developer_only_and_stats_omit_quota_hint() -> None:
     assert 'current_user and current_user.role == "developer"' in base_template
     assert 'href="/quota">套餐' in base_template
     assert "套餐额度" not in stats_template
+
+
+def test_download_settings_navigation_is_visible_to_logged_in_users() -> None:
+    base_template = Path("templates/base.html").read_text(encoding="utf-8")
+
+    assert 'href="/settings/download">下载设置' in base_template
+
+
+def test_save_and_reset_download_settings_preserves_other_local_settings(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(local_settings, "LOCAL_SETTINGS_PATH", tmp_path / "local_settings.json")
+    local_settings.save_local_settings(
+        {
+            "rclone_drive_client_id": "client-id",
+            "proxy_url": "http://127.0.0.1:7890",
+        }
+    )
+
+    app_main.save_download_settings(
+        {
+            "drive_download_timeout_seconds": "600",
+            "drive_item_retry_backoff_seconds": "10,20,bad",
+            "drive_download_delay_seconds": "4",
+            "max_image_file_size_mb": "150",
+            "min_free_disk_space_mb": "2048",
+            "rclone_transfers": "2",
+            "rclone_checkers": "3",
+            "printerval_curl_timeout_seconds": "40",
+            "printerval_playwright_timeout_seconds": "180",
+            "printerval_playwright_enabled": "0",
+        }
+    )
+    settings = local_settings.load_local_settings()
+    assert settings["drive_download_timeout_seconds"] == 600
+    assert settings["drive_item_retry_backoff_seconds"] == "10,20"
+    assert settings["printerval_playwright_enabled"] is False
+
+    app_main.reset_download_settings()
+    settings = local_settings.load_local_settings()
+    assert "drive_download_timeout_seconds" not in settings
+    assert settings["rclone_drive_client_id"] == "client-id"
+    assert settings["proxy_url"] == "http://127.0.0.1:7890"

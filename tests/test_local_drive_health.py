@@ -6,12 +6,12 @@ import pytest
 
 from app import main as app_main
 from app.core import downloader
+from app.core import local_settings
 
 
 @pytest.fixture(autouse=True)
 def isolated_local_settings(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(app_main, "LOCAL_SETTINGS_PATH", tmp_path / "local_settings.json")
-    monkeypatch.setattr("app.core.downloader.LOCAL_SETTINGS_PATH", tmp_path / "local_settings.json")
+    monkeypatch.setattr(local_settings, "LOCAL_SETTINGS_PATH", tmp_path / "local_settings.json")
     monkeypatch.delenv("RCLONE_DRIVE_CLIENT_ID", raising=False)
     monkeypatch.delenv("RCLONE_DRIVE_CLIENT_SECRET", raising=False)
     monkeypatch.delenv("HTTP_PROXY", raising=False)

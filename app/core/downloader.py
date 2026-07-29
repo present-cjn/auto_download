@@ -21,6 +21,8 @@ import os
 
 import requests
 
+from app.core.local_settings import env_or_setting, load_local_settings
+
 
 IMAGE_EXTENSIONS = {
     ".jpg",
@@ -38,7 +40,6 @@ DEFAULT_RCLONE_CHECKERS = "1"
 DEFAULT_RCLONE_DRIVE_PACER_MIN_SLEEP = "500ms"
 DEFAULT_RCLONE_DRIVE_PACER_BURST = "5"
 DEFAULT_RCLONE_LOCAL_ENCODING = "Slash,LtGt,DoubleQuote,Colon,Question,Asterisk,Pipe,BackSlash,Del,Ctl,InvalidUtf8,Dot"
-LOCAL_SETTINGS_PATH = Path("data/local_settings.json")
 DEFAULT_PROXY_URL = "http://127.0.0.1:7890"
 DEFAULT_PRINTERVAL_CURL_TIMEOUT_SECONDS = 30
 DEFAULT_PRINTERVAL_IMAGE_TIMEOUT_BUDGET_SECONDS = 90
@@ -384,15 +385,29 @@ def image_file_count(directory: Path) -> int:
     return sum(1 for _ in iter_image_files(directory))
 
 
-def max_image_file_size_mb() -> int:
-    raw_value = os.getenv("MAX_IMAGE_FILE_SIZE_MB", "").strip()
-    if not raw_value:
-        return DEFAULT_MAX_IMAGE_FILE_SIZE_MB
+def configured_int(env_name: str, setting_name: str, default: int, minimum: int = 0) -> int:
+    raw_value, _source = env_or_setting(os.getenv(env_name, ""), setting_name, default)
     try:
-        value = int(raw_value)
-    except ValueError:
-        return DEFAULT_MAX_IMAGE_FILE_SIZE_MB
-    return max(1, value)
+        value = int(str(raw_value).strip())
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, value)
+
+
+def configured_bool(env_name: str, setting_name: str, default: bool) -> bool:
+    raw_value, _source = env_or_setting(os.getenv(env_name, ""), setting_name, default)
+    if isinstance(raw_value, bool):
+        return raw_value
+    lowered = str(raw_value).strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def max_image_file_size_mb() -> int:
+    return configured_int("MAX_IMAGE_FILE_SIZE_MB", "max_image_file_size_mb", DEFAULT_MAX_IMAGE_FILE_SIZE_MB, 1)
 
 
 def max_image_file_size_bytes() -> int:
@@ -416,14 +431,7 @@ def validate_image_file_sizes(directory: Path) -> None:
 
 
 def min_free_disk_space_mb() -> int:
-    raw_value = os.getenv("MIN_FREE_DISK_SPACE_MB", "").strip()
-    if not raw_value:
-        return DEFAULT_MIN_FREE_DISK_SPACE_MB
-    try:
-        value = int(raw_value)
-    except ValueError:
-        return DEFAULT_MIN_FREE_DISK_SPACE_MB
-    return max(0, value)
+    return configured_int("MIN_FREE_DISK_SPACE_MB", "min_free_disk_space_mb", DEFAULT_MIN_FREE_DISK_SPACE_MB, 0)
 
 
 def ensure_min_free_disk_space(path: Path) -> None:
@@ -583,25 +591,21 @@ def import_playwright_sync_api():
 
 
 def drive_download_timeout_seconds() -> int:
-    raw_value = os.getenv("DRIVE_DOWNLOAD_TIMEOUT_SECONDS", "")
-    if not raw_value:
-        return DEFAULT_DOWNLOAD_TIMEOUT_SECONDS
-    try:
-        value = int(raw_value)
-    except ValueError:
-        return DEFAULT_DOWNLOAD_TIMEOUT_SECONDS
-    return max(1, value)
+    return configured_int(
+        "DRIVE_DOWNLOAD_TIMEOUT_SECONDS",
+        "drive_download_timeout_seconds",
+        DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
+        1,
+    )
 
 
 def printerval_curl_timeout_seconds() -> int:
-    raw_value = os.getenv("PRINTERVAL_CURL_TIMEOUT_SECONDS", "")
-    if not raw_value:
-        return DEFAULT_PRINTERVAL_CURL_TIMEOUT_SECONDS
-    try:
-        value = int(raw_value)
-    except ValueError:
-        return DEFAULT_PRINTERVAL_CURL_TIMEOUT_SECONDS
-    return max(1, value)
+    return configured_int(
+        "PRINTERVAL_CURL_TIMEOUT_SECONDS",
+        "printerval_curl_timeout_seconds",
+        DEFAULT_PRINTERVAL_CURL_TIMEOUT_SECONDS,
+        1,
+    )
 
 
 def printerval_download_timeout_seconds(image_count: int) -> int:
@@ -612,8 +616,7 @@ def printerval_download_timeout_seconds(image_count: int) -> int:
 
 
 def printerval_playwright_enabled() -> bool:
-    raw_value = os.getenv("PRINTERVAL_PLAYWRIGHT_ENABLED", "1").strip().lower()
-    return raw_value not in {"0", "false", "no", "off"}
+    return configured_bool("PRINTERVAL_PLAYWRIGHT_ENABLED", "printerval_playwright_enabled", True)
 
 
 def printerval_playwright_headless() -> bool:
@@ -622,14 +625,12 @@ def printerval_playwright_headless() -> bool:
 
 
 def printerval_playwright_timeout_seconds() -> int:
-    raw_value = os.getenv("PRINTERVAL_PLAYWRIGHT_TIMEOUT_SECONDS", "")
-    if not raw_value:
-        return DEFAULT_PRINTERVAL_PLAYWRIGHT_TIMEOUT_SECONDS
-    try:
-        value = int(raw_value)
-    except ValueError:
-        return DEFAULT_PRINTERVAL_PLAYWRIGHT_TIMEOUT_SECONDS
-    return max(1, value)
+    return configured_int(
+        "PRINTERVAL_PLAYWRIGHT_TIMEOUT_SECONDS",
+        "printerval_playwright_timeout_seconds",
+        DEFAULT_PRINTERVAL_PLAYWRIGHT_TIMEOUT_SECONDS,
+        1,
+    )
 
 
 def printerval_playwright_storage_state_path() -> str:
@@ -740,15 +741,6 @@ def printerval_curl_bin() -> str:
     return os.getenv("PRINTERVAL_CURL_BIN", "curl").strip() or "curl"
 
 
-def load_local_settings() -> dict:
-    try:
-        with LOCAL_SETTINGS_PATH.open("r", encoding="utf-8") as file:
-            value = json.load(file)
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return value if isinstance(value, dict) else {}
-
-
 def rclone_proxy_config() -> dict:
     settings = load_local_settings()
     env_proxy = os.getenv("HTTPS_PROXY", "").strip() or os.getenv("HTTP_PROXY", "").strip()
@@ -790,11 +782,13 @@ def rclone_drive_remotes() -> list[str]:
 
 
 def rclone_transfers() -> str:
-    return os.getenv("RCLONE_TRANSFERS", DEFAULT_RCLONE_TRANSFERS).strip() or DEFAULT_RCLONE_TRANSFERS
+    raw_value, _source = env_or_setting(os.getenv("RCLONE_TRANSFERS", ""), "rclone_transfers", DEFAULT_RCLONE_TRANSFERS)
+    return str(raw_value).strip() or DEFAULT_RCLONE_TRANSFERS
 
 
 def rclone_checkers() -> str:
-    return os.getenv("RCLONE_CHECKERS", DEFAULT_RCLONE_CHECKERS).strip() or DEFAULT_RCLONE_CHECKERS
+    raw_value, _source = env_or_setting(os.getenv("RCLONE_CHECKERS", ""), "rclone_checkers", DEFAULT_RCLONE_CHECKERS)
+    return str(raw_value).strip() or DEFAULT_RCLONE_CHECKERS
 
 
 def rclone_drive_pacer_min_sleep() -> str:

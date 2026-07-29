@@ -516,6 +516,43 @@ def test_rclone_command_decodes_output_as_utf8_with_replacement(monkeypatch) -> 
     assert kwargs_seen["text"] is True
 
 
+def test_downloader_config_reads_local_settings(tmp_path: Path, monkeypatch) -> None:
+    from app.core import downloader, local_settings
+
+    monkeypatch.setattr(local_settings, "LOCAL_SETTINGS_PATH", tmp_path / "local_settings.json")
+    local_settings.save_local_settings(
+        {
+            "drive_download_timeout_seconds": 321,
+            "max_image_file_size_mb": 77,
+            "min_free_disk_space_mb": 2048,
+            "rclone_transfers": "2",
+            "rclone_checkers": "3",
+            "printerval_curl_timeout_seconds": 44,
+            "printerval_playwright_timeout_seconds": 155,
+            "printerval_playwright_enabled": False,
+        }
+    )
+
+    assert downloader.drive_download_timeout_seconds() == 321
+    assert downloader.max_image_file_size_mb() == 77
+    assert downloader.min_free_disk_space_mb() == 2048
+    assert downloader.rclone_transfers() == "2"
+    assert downloader.rclone_checkers() == "3"
+    assert downloader.printerval_curl_timeout_seconds() == 44
+    assert downloader.printerval_playwright_timeout_seconds() == 155
+    assert downloader.printerval_playwright_enabled() is False
+
+
+def test_downloader_config_prefers_environment_over_local_settings(tmp_path: Path, monkeypatch) -> None:
+    from app.core import downloader, local_settings
+
+    monkeypatch.setattr(local_settings, "LOCAL_SETTINGS_PATH", tmp_path / "local_settings.json")
+    local_settings.save_local_settings({"drive_download_timeout_seconds": 321})
+    monkeypatch.setenv("DRIVE_DOWNLOAD_TIMEOUT_SECONDS", "456")
+
+    assert downloader.drive_download_timeout_seconds() == 456
+
+
 def test_cached_drive_folder_uses_resource_kind_prefix(tmp_path: Path, monkeypatch) -> None:
     def fake_download_file(file_id: str, output_dir: Path) -> None:
         assert file_id == "file123"

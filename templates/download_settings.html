@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}下载设置{% endblock %}
+{% block content %}
+{% set values = download_settings.values %}
+{% set sources = download_settings.sources %}
+{% set labels = download_settings.source_labels %}
+<section class="page-header">
+  <div>
+    <h1>下载设置</h1>
+    <p>本机下载超时、重试和安全限制。</p>
+  </div>
+  <div class="actions">
+    <a class="button subtle" href="/settings/drive">Drive 设置</a>
+  </div>
+</section>
+
+<form method="post" action="/settings/download">
+  <section class="settings-panel">
+    <div class="section-heading">
+      <h2>基础下载</h2>
+      <p>这些设置会在下一次下载任务开始时生效。</p>
+    </div>
+    <div class="settings-form">
+      <label>
+        下载超时（秒）
+        <input type="number" name="drive_download_timeout_seconds" min="1" value="{{ values.drive_download_timeout_seconds }}">
+        <small>{{ labels.get(sources.drive_download_timeout_seconds, sources.drive_download_timeout_seconds) }}</small>
+      </label>
+      <label>
+        失败重试等待（秒）
+        <input type="text" name="drive_item_retry_backoff_seconds" value="{{ values.drive_item_retry_backoff_seconds }}" placeholder="30,90">
+        <small>{{ labels.get(sources.drive_item_retry_backoff_seconds, sources.drive_item_retry_backoff_seconds) }}</small>
+      </label>
+      <label>
+        每项间隔（秒）
+        <input type="number" name="drive_download_delay_seconds" min="0" value="{{ values.drive_download_delay_seconds }}">
+        <small>{{ labels.get(sources.drive_download_delay_seconds, sources.drive_download_delay_seconds) }}</small>
+      </label>
+      <label>
+        最大图片大小（MB）
+        <input type="number" name="max_image_file_size_mb" min="1" value="{{ values.max_image_file_size_mb }}">
+        <small>{{ labels.get(sources.max_image_file_size_mb, sources.max_image_file_size_mb) }}</small>
+      </label>
+      <label>
+        最小剩余磁盘（MB）
+        <input type="number" name="min_free_disk_space_mb" min="0" value="{{ values.min_free_disk_space_mb }}">
+        <small>{{ labels.get(sources.min_free_disk_space_mb, sources.min_free_disk_space_mb) }}</small>
+      </label>
+    </div>
+  </section>
+
+  <section class="settings-panel">
+    <div class="section-heading">
+      <h2>高级下载</h2>
+      <p>优先保持保守值。并发调大可能更快，也更容易触发限流。</p>
+    </div>
+    <div class="settings-form">
+      <label>
+        rclone transfers
+        <input type="number" name="rclone_transfers" min="1" value="{{ values.rclone_transfers }}">
+        <small>{{ labels.get(sources.rclone_transfers, sources.rclone_transfers) }}</small>
+      </label>
+      <label>
+        rclone checkers
+        <input type="number" name="rclone_checkers" min="1" value="{{ values.rclone_checkers }}">
+        <small>{{ labels.get(sources.rclone_checkers, sources.rclone_checkers) }}</small>
+      </label>
+      <label>
+        Printerval 请求超时（秒）
+        <input type="number" name="printerval_curl_timeout_seconds" min="1" value="{{ values.printerval_curl_timeout_seconds }}">
+        <small>{{ labels.get(sources.printerval_curl_timeout_seconds, sources.printerval_curl_timeout_seconds) }}</small>
+      </label>
+      <label>
+        Printerval 浏览器超时（秒）
+        <input type="number" name="printerval_playwright_timeout_seconds" min="1" value="{{ values.printerval_playwright_timeout_seconds }}">
+        <small>{{ labels.get(sources.printerval_playwright_timeout_seconds, sources.printerval_playwright_timeout_seconds) }}</small>
+      </label>
+      <label>
+        Printerval 浏览器兜底
+        <select name="printerval_playwright_enabled">
+          <option value="1" {% if values.printerval_playwright_enabled %}selected{% endif %}>启用</option>
+          <option value="0" {% if not values.printerval_playwright_enabled %}selected{% endif %}>停用</option>
+        </select>
+        <small>{{ labels.get(sources.printerval_playwright_enabled, sources.printerval_playwright_enabled) }}</small>
+      </label>
+    </div>
+  </section>
+
+  <div class="settings-actions">
+    <button class="button primary" type="submit">保存下载设置</button>
+    <a class="button subtle" href="/settings/download">刷新</a>
+  </div>
+</form>
+
+<form class="inline-form" method="post" action="/settings/download/reset">
+  <button class="button danger" type="submit">恢复默认下载设置</button>
+</form>
+{% endblock %}

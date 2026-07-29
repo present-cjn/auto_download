@@ -2,5 +2,15 @@
   "rclone_drive_client_id": "YOUR_GOOGLE_DESKTOP_CLIENT_ID",
   "rclone_drive_client_secret": "YOUR_GOOGLE_DESKTOP_CLIENT_SECRET",
   "proxy_enabled": true,
-  "proxy_url": "http://127.0.0.1:7890"
+  "proxy_url": "http://127.0.0.1:7890",
+  "drive_download_timeout_seconds": 300,
+  "drive_item_retry_backoff_seconds": "30,90",
+  "drive_download_delay_seconds": 8,
+  "max_image_file_size_mb": 100,
+  "min_free_disk_space_mb": 1024,
+  "rclone_transfers": "1",
+  "rclone_checkers": "1",
+  "printerval_curl_timeout_seconds": 30,
+  "printerval_playwright_timeout_seconds": 120,
+  "printerval_playwright_enabled": true
 }

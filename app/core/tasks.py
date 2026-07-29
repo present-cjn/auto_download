@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.core import database as db
+from app.core.local_settings import env_or_setting
 from app.core.downloader import (
     cached_drive_folder,
     classify_download_failure,
@@ -37,18 +38,22 @@ DOWNLOAD_START_ALLOWED_BATCH_STATUSES = {"confirmed", "completed_with_errors"}
 
 
 def configured_download_delay_seconds() -> int:
-    raw_value = os.getenv("DRIVE_DOWNLOAD_DELAY_SECONDS", "8")
+    raw_value, _source = env_or_setting(os.getenv("DRIVE_DOWNLOAD_DELAY_SECONDS", ""), "drive_download_delay_seconds", 8)
     try:
-        value = int(raw_value)
-    except ValueError:
+        value = int(str(raw_value).strip())
+    except (TypeError, ValueError):
         return 8
     return max(0, value)
 
 
 def configured_retry_backoff_seconds() -> list[int]:
-    raw_value = os.getenv("DRIVE_ITEM_RETRY_BACKOFF_SECONDS", "30,90")
+    raw_value, _source = env_or_setting(
+        os.getenv("DRIVE_ITEM_RETRY_BACKOFF_SECONDS", ""),
+        "drive_item_retry_backoff_seconds",
+        "30,90",
+    )
     values = []
-    for part in raw_value.split(","):
+    for part in str(raw_value).split(","):
         part = part.strip()
         if not part:
             continue
