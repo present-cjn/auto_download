@@ -191,7 +191,7 @@ def process_one_download_item(item: dict) -> str:
             sku_dir = safe_filename(sku)
             target_dir = ORDERS_DIR / str(batch_id) / sku_dir
             source_dir = cached_drive_folder(item["design_link"], CACHE_DIR / str(batch_id))
-            copied_files = copy_images(source_dir, target_dir)
+            copied_files = copy_images(source_dir, target_dir, name_prefix=source_type)
             for copied in copied_files:
                 db.add_downloaded_file(
                     download_item_id=download_item_id,

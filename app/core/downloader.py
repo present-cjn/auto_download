@@ -83,6 +83,13 @@ class CopiedFile:
 
 
 @dataclass(frozen=True)
+class DriveFolderImageExpectation:
+    source_count: int
+    unique_target_count: int
+    duplicate_names: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class DownloadFailure:
     code: str
     message: str
@@ -522,6 +529,34 @@ def describe_directory_files(directory: Path, limit: int = 10) -> str:
     if len(files) > limit:
         sample = f"{sample}, ... ({len(files)} total)"
     return sample
+
+
+def drive_folder_image_expectation(paths: list[str]) -> DriveFolderImageExpectation:
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    duplicate_seen: set[str] = set()
+    for path in paths:
+        name = Path(path).name
+        if name in seen:
+            if name not in duplicate_seen:
+                duplicates.append(name)
+                duplicate_seen.add(name)
+            continue
+        seen.add(name)
+    return DriveFolderImageExpectation(
+        source_count=len(paths),
+        unique_target_count=len(seen),
+        duplicate_names=tuple(duplicates),
+    )
+
+
+def drive_folder_expectation_log(expectation: DriveFolderImageExpectation) -> str:
+    detail = f"source_images={expectation.source_count} expected_images={expectation.unique_target_count}"
+    if expectation.duplicate_names:
+        detail += f" duplicate_source_names={', '.join(expectation.duplicate_names[:5])}"
+        if len(expectation.duplicate_names) > 5:
+            detail += f", ... ({len(expectation.duplicate_names)} total)"
+    return detail
 
 
 def google_drive_uc_url(file_id: str) -> str:
@@ -2401,12 +2436,19 @@ def download_drive_file_by_id_gdown(file_id: str, output_dir: Path) -> None:
     raise_download_attempts_error(errors, network_failures)
 
 
-def copy_images(download_dir: Path, order_dir: Path) -> list[CopiedFile]:
+def output_image_name(name_prefix: str, index: int, suffix: str) -> str:
+    safe_prefix = safe_filename(name_prefix.strip() or "image")
+    safe_suffix = suffix.lower() if suffix else ".jpg"
+    return f"{safe_prefix}-{index}{safe_suffix}"
+
+
+def copy_images(download_dir: Path, order_dir: Path, name_prefix: Optional[str] = None) -> list[CopiedFile]:
     order_dir.mkdir(parents=True, exist_ok=True)
     copied: list[CopiedFile] = []
-    for image_path in iter_image_files(download_dir):
+    for index, image_path in enumerate(sorted(iter_image_files(download_dir)), start=1):
         validate_image_file_size(image_path)
-        target = next_available_path(order_dir, image_path.name)
+        target_name = output_image_name(name_prefix, index, image_path.suffix) if name_prefix else image_path.name
+        target = next_available_path(order_dir, target_name)
         shutil.copy2(image_path, target)
         copied.append(
             CopiedFile(
@@ -2437,13 +2479,17 @@ def download_design_images(url: str, order_dir: Path) -> list[CopiedFile]:
 def cached_drive_folder(url: str, cache_root: Path) -> Path:
     expected_printerval_image_count = 0
     expected_drive_image_count: Optional[int] = None
+    drive_expectation: Optional[DriveFolderImageExpectation] = None
     expected_images: Optional[int] = None
     if is_google_drive_url(url):
         resource = parse_drive_resource_for_download(url)
         cache_dir = cache_root / f"{resource.kind}-{resource.resource_id}"
         resource_label = f"{resource.kind}:{resource.resource_id}"
         if drive_download_backend() == "rclone" and resource.kind == "folder":
-            expected_drive_image_count = len(rclone_drive_folder_image_paths(resource.resource_id))
+            drive_expectation = drive_folder_image_expectation(
+                rclone_drive_folder_image_paths(resource.resource_id)
+            )
+            expected_drive_image_count = drive_expectation.unique_target_count
             expected_images = expected_drive_image_count
     elif is_printerval_design_url(url):
         expected_printerval_image_count = len(parse_printerval_design_image_urls(url))
@@ -2466,8 +2512,13 @@ def cached_drive_folder(url: str, cache_root: Path) -> Path:
             validate_image_file_sizes(cache_dir)
             return cache_dir
     elif expected_drive_image_count is not None:
+        expectation_detail = (
+            drive_folder_expectation_log(drive_expectation)
+            if drive_expectation
+            else f"expected_images={expected_drive_image_count}"
+        )
         print(
-            f"Drive folder inspect resource={resource_label} expected_images={expected_drive_image_count} "
+            f"Drive folder inspect resource={resource_label} {expectation_detail} "
             f"cached_images={cached_count}",
             flush=True,
         )
@@ -2497,12 +2548,20 @@ def cached_drive_folder(url: str, cache_root: Path) -> Path:
                 cache_dir = cache_root / f"folder-{resource.resource_id}"
                 resource_label = f"folder:{resource.resource_id}"
                 if drive_download_backend() == "rclone":
-                    expected_drive_image_count = len(rclone_drive_folder_image_paths(resource.resource_id))
+                    drive_expectation = drive_folder_image_expectation(
+                        rclone_drive_folder_image_paths(resource.resource_id)
+                    )
+                    expected_drive_image_count = drive_expectation.unique_target_count
                     expected_images = expected_drive_image_count
                 fallback_cached_count = image_file_count(cache_dir)
                 if expected_drive_image_count is not None:
+                    expectation_detail = (
+                        drive_folder_expectation_log(drive_expectation)
+                        if drive_expectation
+                        else f"expected_images={expected_drive_image_count}"
+                    )
                     print(
-                        f"Drive folder inspect resource={resource_label} expected_images={expected_drive_image_count} "
+                        f"Drive folder inspect resource={resource_label} {expectation_detail} "
                         f"cached_images={fallback_cached_count}",
                         flush=True,
                     )
@@ -2531,15 +2590,20 @@ def cached_drive_folder(url: str, cache_root: Path) -> Path:
         normalize_image_file_extensions(staging_dir)
         downloaded_count = image_file_count(staging_dir)
         if expected_drive_image_count is not None:
+            expectation_detail = (
+                drive_folder_expectation_log(drive_expectation)
+                if drive_expectation
+                else f"expected_images={expected_drive_image_count}"
+            )
             print(
-                f"Drive folder downloaded resource={resource_label} expected_images={expected_drive_image_count} "
+                f"Drive folder downloaded resource={resource_label} {expectation_detail} "
                 f"downloaded_images={downloaded_count}",
                 flush=True,
             )
             if downloaded_count < expected_drive_image_count:
                 raise DriveDownloadError(
                     "Google Drive folder download incomplete; "
-                    f"resource={resource_label}; expected_images={expected_drive_image_count}; "
+                    f"resource={resource_label}; {expectation_detail}; "
                     f"downloaded_images={downloaded_count}; files={describe_directory_files(staging_dir)}"
                 )
         if expected_printerval_image_count and downloaded_count < expected_printerval_image_count:

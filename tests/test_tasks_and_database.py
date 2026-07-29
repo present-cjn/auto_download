@@ -388,7 +388,7 @@ def test_download_timeout_does_not_stop_following_items(tmp_path: Path, monkeypa
         assert batch["status"] == "completed_with_errors"
         assert status_counts["failed"] == 1
         assert status_counts["downloaded"] == 1
-        assert (orders_dir / str(batch_id) / "SKU-OK" / "image.jpg").exists()
+        assert (orders_dir / str(batch_id) / "SKU-OK" / "design-1.jpg").exists()
     finally:
         db.DB_PATH = original_path
 
@@ -451,7 +451,7 @@ def test_plain_image_url_downloads_through_server_task(tmp_path: Path, monkeypat
         assert status_counts["downloaded"] == 1
         assert item["download_status"] == "downloaded"
         assert item["download_image_count"] == 1
-        assert (orders_dir / str(batch_id) / "SKU-DIRECT" / "front-view.jpg").read_bytes() == b"jpg"
+        assert (orders_dir / str(batch_id) / "SKU-DIRECT" / "design-1.jpg").read_bytes() == b"jpg"
     finally:
         db.DB_PATH = original_path
 
@@ -589,7 +589,7 @@ def test_rate_limited_download_retries_and_succeeds(tmp_path: Path, monkeypatch)
         assert status_counts["downloaded"] == 1
         assert status_counts["failed"] == 0
         assert item == []
-        assert (orders_dir / str(batch_id) / "SKU-A" / "image.jpg").exists()
+        assert (orders_dir / str(batch_id) / "SKU-A" / "design-1.jpg").exists()
     finally:
         db.DB_PATH = original_path
 

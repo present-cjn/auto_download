@@ -208,6 +208,20 @@ def test_filename_and_copy_images(tmp_path: Path) -> None:
     assert (target / "image(1).jpg").read_bytes() == b"jpg"
 
 
+def test_copy_images_renames_with_prefix(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    source.mkdir()
+    (source / "a.png").write_bytes(b"png")
+    (source / "b.JPG").write_bytes(b"jpg")
+
+    copied = copy_images(source, target, name_prefix="design")
+
+    assert [file.file_name for file in copied] == ["design-1.png", "design-2.jpg"]
+    assert (target / "design-1.png").read_bytes() == b"png"
+    assert (target / "design-2.jpg").read_bytes() == b"jpg"
+
+
 def test_normalize_image_file_extensions_adds_missing_suffix(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
@@ -738,6 +752,55 @@ def test_cached_drive_folder_reuses_existing_images(tmp_path: Path, monkeypatch)
     assert first_dir == second_dir == tmp_path / "folder-folder123"
     assert calls == ["folder123"]
     assert (second_dir / "design.jpg").read_bytes() == b"jpg"
+
+
+def test_cached_drive_folder_allows_duplicate_source_names(tmp_path: Path, monkeypatch) -> None:
+    def fake_download_folder(folder_id: str, output_dir: Path) -> None:
+        assert folder_id == "folder123"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "dup.png").write_bytes(b"dup")
+        (output_dir / "other.png").write_bytes(b"other")
+
+    monkeypatch.setattr("app.core.downloader.download_drive_folder_by_id", fake_download_folder)
+    monkeypatch.setattr(
+        "app.core.downloader.rclone_drive_folder_image_paths",
+        lambda folder_id: ["dup.png", "dup.png", "other.png"],
+    )
+    monkeypatch.setattr(
+        "app.core.downloader.run_download_with_timeout",
+        lambda download_func, resource_id, output_dir, timeout_seconds=None: download_func(resource_id, output_dir),
+    )
+
+    cache_dir = cached_drive_folder("https://drive.google.com/drive/folders/folder123", tmp_path)
+
+    assert sorted(path.name for path in iter_image_files(cache_dir)) == ["dup.png", "other.png"]
+
+
+def test_cached_drive_folder_still_reports_incomplete_unique_images(tmp_path: Path, monkeypatch) -> None:
+    def fake_download_folder(folder_id: str, output_dir: Path) -> None:
+        assert folder_id == "folder123"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "one.png").write_bytes(b"one")
+        (output_dir / "two.png").write_bytes(b"two")
+
+    monkeypatch.setattr("app.core.downloader.download_drive_folder_by_id", fake_download_folder)
+    monkeypatch.setattr(
+        "app.core.downloader.rclone_drive_folder_image_paths",
+        lambda folder_id: ["one.png", "two.png", "three.png"],
+    )
+    monkeypatch.setattr(
+        "app.core.downloader.run_download_with_timeout",
+        lambda download_func, resource_id, output_dir, timeout_seconds=None: download_func(resource_id, output_dir),
+    )
+
+    try:
+        cached_drive_folder("https://drive.google.com/drive/folders/folder123", tmp_path)
+    except DriveDownloadError as exc:
+        message = str(exc)
+        assert "expected_images=3" in message
+        assert "downloaded_images=2" in message
+    else:
+        raise AssertionError("Expected DriveDownloadError")
 
 
 def test_cached_drive_folder_downloads_plain_image_url(tmp_path: Path, monkeypatch) -> None:
