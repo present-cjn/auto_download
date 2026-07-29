@@ -167,7 +167,8 @@ def parse_printerval_design_image_urls(url: str) -> list[str]:
         return []
 
     parsed = urlparse(url)
-    raw_values = parse_qs(parsed.query, keep_blank_values=True).get("design_urls", [])
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    raw_values = query.get("design_urls", []) + query.get("design_url", [])
     if not raw_values:
         return []
 
@@ -2147,7 +2148,9 @@ def run_rclone_command(
             command,
             check=False,
             capture_output=True,
+            encoding="utf-8",
             env=rclone_subprocess_env(),
+            errors="replace",
             text=True,
             timeout=timeout_seconds,
         )
@@ -2215,7 +2218,7 @@ def rclone_drive_folder_image_paths(folder_id: str) -> list[str]:
         try:
             completed = run_rclone_command(command, timeout_seconds=rclone_metadata_timeout_seconds())
             paths: list[str] = []
-            for line in completed.stdout.splitlines():
+            for line in (completed.stdout or "").splitlines():
                 path = line.strip()
                 if path and Path(path).suffix.lower() in IMAGE_EXTENSIONS:
                     paths.append(path)

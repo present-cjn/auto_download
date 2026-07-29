@@ -360,7 +360,7 @@ def test_download_drive_file_by_id_reports_attempt_details(tmp_path: Path, monke
 def test_rclone_folder_download_uses_conservative_defaults(tmp_path: Path, monkeypatch) -> None:
     calls = []
 
-    def fake_run(command, check, capture_output, text, timeout=None, env=None):
+    def fake_run(command, check, capture_output, text, timeout=None, env=None, **kwargs):
         calls.append(command)
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
@@ -429,7 +429,7 @@ def test_rclone_bin_uses_pyinstaller_resource_root(tmp_path: Path, monkeypatch) 
 def test_rclone_file_download_uses_copyid_directory_target(tmp_path: Path, monkeypatch) -> None:
     calls = []
 
-    def fake_run(command, check, capture_output, text, timeout=None, env=None):
+    def fake_run(command, check, capture_output, text, timeout=None, env=None, **kwargs):
         calls.append(command)
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
@@ -461,7 +461,7 @@ def test_rclone_file_download_uses_copyid_directory_target(tmp_path: Path, monke
 def test_rclone_remote_pool_retries_rate_limit_on_next_remote(tmp_path: Path, monkeypatch) -> None:
     calls = []
 
-    def fake_run(command, check, capture_output, text, timeout=None, env=None):
+    def fake_run(command, check, capture_output, text, timeout=None, env=None, **kwargs):
         calls.append(command)
         if len(calls) == 1:
             return subprocess.CompletedProcess(command, 1, stdout="", stderr="rateLimitExceeded")
@@ -479,7 +479,7 @@ def test_rclone_remote_pool_retries_rate_limit_on_next_remote(tmp_path: Path, mo
 def test_rclone_remote_pool_stops_on_permission_error(tmp_path: Path, monkeypatch) -> None:
     calls = []
 
-    def fake_run(command, check, capture_output, text, timeout=None, env=None):
+    def fake_run(command, check, capture_output, text, timeout=None, env=None, **kwargs):
         calls.append(command)
         return subprocess.CompletedProcess(command, 1, stdout="", stderr="permission denied")
 
@@ -495,6 +495,25 @@ def test_rclone_remote_pool_stops_on_permission_error(tmp_path: Path, monkeypatc
         raise AssertionError("Expected DriveDownloadError")
 
     assert [call[2] for call in calls] == ["gdrive_a:"]
+
+
+def test_rclone_command_decodes_output_as_utf8_with_replacement(monkeypatch) -> None:
+    from app.core import downloader
+
+    kwargs_seen = {}
+
+    def fake_run(command, **kwargs):
+        kwargs_seen.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, stdout=None, stderr=None)
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+
+    completed = downloader.run_rclone_command(["rclone", "lsf", "gdrive:"])
+
+    assert completed.stdout is None
+    assert kwargs_seen["encoding"] == "utf-8"
+    assert kwargs_seen["errors"] == "replace"
+    assert kwargs_seen["text"] is True
 
 
 def test_cached_drive_folder_uses_resource_kind_prefix(tmp_path: Path, monkeypatch) -> None:
@@ -538,7 +557,7 @@ def test_cached_drive_file_adds_extension_to_downloaded_image(tmp_path: Path, mo
 def test_open_id_folder_resolves_with_rclone_folder_probe(tmp_path: Path, monkeypatch) -> None:
     commands = []
 
-    def fake_run(command, check, capture_output, text, timeout=None, env=None):
+    def fake_run(command, check, capture_output, text, timeout=None, env=None, **kwargs):
         commands.append(command)
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
@@ -575,7 +594,7 @@ def test_open_id_folder_resolves_with_rclone_folder_probe(tmp_path: Path, monkey
 
 
 def test_open_id_file_resolves_with_rclone_folder_probe(tmp_path: Path, monkeypatch) -> None:
-    def fake_run(command, check, capture_output, text, timeout=None, env=None):
+    def fake_run(command, check, capture_output, text, timeout=None, env=None, **kwargs):
         return subprocess.CompletedProcess(
             command,
             1,
@@ -724,6 +743,17 @@ def test_printerval_design_url_parses_all_image_urls() -> None:
         "https://storage.prtvstatic.com/2026/06/25/"
         "m3vwych5r6zc7psqmakcpjvtfalrgfzsiuogh5m8-92f078ea09ab8bfa223b28f7b2cd18ea.png"
     )
+
+
+def test_printerval_design_url_accepts_single_design_url_parameter() -> None:
+    image_urls = parse_printerval_design_image_urls(
+        "https://printerval.com/us/folder-design?product_id=2163122603"
+        "&design_url=https://assets.printerval.com/2026/07/24/1784878190.848021_3000x3000.png"
+    )
+
+    assert image_urls == [
+        "https://assets.printerval.com/2026/07/24/1784878190.848021_3000x3000.png"
+    ]
 
 
 def test_printerval_download_url_prefers_dl_domain_for_psd_renderer() -> None:
