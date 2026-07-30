@@ -1140,6 +1140,16 @@ def reset_download_settings() -> None:
     save_local_settings(settings)
 
 
+def settings_notice(query_params: Any) -> str:
+    if query_params.get("saved") == "1":
+        return "设置已保存，并会在下一次下载任务开始时生效。"
+    if query_params.get("reset") == "1":
+        return "设置已恢复为默认值。"
+    if query_params.get("cleared") == "1":
+        return "本地配置已清空。"
+    return ""
+
+
 def rclone_drive_oauth_config_options() -> list[str]:
     options = [
         "scope",
@@ -1643,6 +1653,7 @@ def drive_settings_page(request: Request):
             oauth_config=oauth_config,
             proxy_config=rclone_proxy_config(),
             proxy_test=proxy_test,
+            settings_notice=settings_notice(request.query_params),
         ),
     )
 
@@ -1679,7 +1690,7 @@ def save_drive_oauth_settings(
     else:
         raise HTTPException(status_code=400, detail="client_id 和 client_secret 需要同时填写，或同时留空。")
     save_local_settings(settings)
-    return RedirectResponse("/settings/drive", status_code=303)
+    return RedirectResponse("/settings/drive?saved=1", status_code=303)
 
 
 @app.post("/settings/drive/oauth/clear")
@@ -1689,7 +1700,7 @@ def clear_drive_oauth_settings(request: Request):
     settings.pop("rclone_drive_client_id", None)
     settings.pop("rclone_drive_client_secret", None)
     save_local_settings(settings)
-    return RedirectResponse("/settings/drive", status_code=303)
+    return RedirectResponse("/settings/drive?cleared=1", status_code=303)
 
 
 @app.post("/settings/drive/proxy")
@@ -1700,7 +1711,7 @@ def save_drive_proxy_settings(
 ):
     require_user(request)
     save_proxy_settings(proxy_enabled == "1", proxy_url)
-    return RedirectResponse("/settings/drive", status_code=303)
+    return RedirectResponse("/settings/drive?saved=1", status_code=303)
 
 
 @app.post("/settings/drive/proxy/test")
@@ -1722,7 +1733,11 @@ def download_settings_page(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="download_settings.html",
-        context=template_context(user, download_settings=download_settings_context()),
+        context=template_context(
+            user,
+            download_settings=download_settings_context(),
+            settings_notice=settings_notice(request.query_params),
+        ),
     )
 
 
@@ -1731,14 +1746,14 @@ async def update_download_settings(request: Request):
     require_user(request)
     form = await request.form()
     save_download_settings(dict(form))
-    return RedirectResponse("/settings/download", status_code=303)
+    return RedirectResponse("/settings/download?saved=1", status_code=303)
 
 
 @app.post("/settings/download/reset")
 def reset_download_settings_page(request: Request):
     require_user(request)
     reset_download_settings()
-    return RedirectResponse("/settings/download", status_code=303)
+    return RedirectResponse("/settings/download?reset=1", status_code=303)
 
 
 @app.post("/quota")

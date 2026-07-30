@@ -14,6 +14,29 @@
   </div>
 </section>
 
+{% if settings_notice %}
+<div class="notice">{{ settings_notice }}</div>
+{% endif %}
+
+<section class="settings-panel">
+  <div class="section-heading">
+    <h2>当前生效值</h2>
+    <p>下方数值是程序当前读取到的配置，括号内为来源。</p>
+  </div>
+  <div class="summary-grid compact">
+    <div><span>{{ values.drive_download_timeout_seconds }} 秒</span><label>下载超时 / {{ labels.get(sources.drive_download_timeout_seconds, sources.drive_download_timeout_seconds) }}</label></div>
+    <div><span>{{ values.drive_item_retry_backoff_seconds }}</span><label>重试等待 / {{ labels.get(sources.drive_item_retry_backoff_seconds, sources.drive_item_retry_backoff_seconds) }}</label></div>
+    <div><span>{{ values.drive_download_delay_seconds }} 秒</span><label>每项间隔 / {{ labels.get(sources.drive_download_delay_seconds, sources.drive_download_delay_seconds) }}</label></div>
+    <div><span>{{ values.max_image_file_size_mb }} MB</span><label>最大文件 / {{ labels.get(sources.max_image_file_size_mb, sources.max_image_file_size_mb) }}</label></div>
+    <div><span>{{ values.min_free_disk_space_mb }} MB</span><label>最小磁盘 / {{ labels.get(sources.min_free_disk_space_mb, sources.min_free_disk_space_mb) }}</label></div>
+    <div><span>{{ values.rclone_transfers }}</span><label>rclone transfers / {{ labels.get(sources.rclone_transfers, sources.rclone_transfers) }}</label></div>
+    <div><span>{{ values.rclone_checkers }}</span><label>rclone checkers / {{ labels.get(sources.rclone_checkers, sources.rclone_checkers) }}</label></div>
+    <div><span>{{ values.printerval_curl_timeout_seconds }} 秒</span><label>Printerval 请求 / {{ labels.get(sources.printerval_curl_timeout_seconds, sources.printerval_curl_timeout_seconds) }}</label></div>
+    <div><span>{{ values.printerval_playwright_timeout_seconds }} 秒</span><label>Printerval 浏览器 / {{ labels.get(sources.printerval_playwright_timeout_seconds, sources.printerval_playwright_timeout_seconds) }}</label></div>
+    <div><span>{{ "启用" if values.printerval_playwright_enabled else "停用" }}</span><label>浏览器兜底 / {{ labels.get(sources.printerval_playwright_enabled, sources.printerval_playwright_enabled) }}</label></div>
+  </div>
+</section>
+
 <form method="post" action="/settings/download">
   <section class="settings-panel">
     <div class="section-heading">
@@ -37,7 +60,7 @@
         <small>{{ labels.get(sources.drive_download_delay_seconds, sources.drive_download_delay_seconds) }}</small>
       </label>
       <label>
-        最大图片大小（MB）
+        最大文件大小（MB）
         <input type="number" name="max_image_file_size_mb" min="1" value="{{ values.max_image_file_size_mb }}">
         <small>{{ labels.get(sources.max_image_file_size_mb, sources.max_image_file_size_mb) }}</small>
       </label>

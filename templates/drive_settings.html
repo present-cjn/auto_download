@@ -11,6 +11,10 @@
   </div>
 </section>
 
+{% if settings_notice %}
+<div class="notice">{{ settings_notice }}</div>
+{% endif %}
+
 <section class="settings-panel">
   <div class="section-heading">
     <h2>本机下载状态</h2>

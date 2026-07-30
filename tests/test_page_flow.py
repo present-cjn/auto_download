@@ -12,9 +12,10 @@ from app.core.security import hash_password, new_session_token, session_expiry_s
 
 
 class FakeRequest:
-    def __init__(self, token: str | None = None):
+    def __init__(self, token: str | None = None, query_params: dict[str, str] | None = None):
         self.cookies = {}
         self.headers = {"x-app-session": token} if token else {}
+        self.query_params = query_params or {}
 
 
 def with_temp_db(database_path: Path):
@@ -113,6 +114,8 @@ def test_download_settings_page_requires_login_and_renders(tmp_path: Path, monke
         assert getattr(settings_exc.value, "status_code") == 303
         assert page.template.name == "download_settings.html"
         assert page.context["download_settings"]["values"]["drive_download_timeout_seconds"] >= 1
+        saved_page = app_main.download_settings_page(FakeRequest(token, {"saved": "1"}))
+        assert "设置已保存" in saved_page.context["settings_notice"]
     finally:
         db.DB_PATH = original_path
 
@@ -358,3 +361,28 @@ def test_save_and_reset_download_settings_preserves_other_local_settings(tmp_pat
     assert "drive_download_timeout_seconds" not in settings
     assert settings["rclone_drive_client_id"] == "client-id"
     assert settings["proxy_url"] == "http://127.0.0.1:7890"
+
+
+def test_download_settings_redirects_show_save_and_reset_status(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(local_settings, "LOCAL_SETTINGS_PATH", tmp_path / "local_settings.json")
+
+    app_main.save_download_settings(
+        {
+            "drive_download_timeout_seconds": "600",
+            "drive_item_retry_backoff_seconds": "10,20",
+            "drive_download_delay_seconds": "4",
+            "max_image_file_size_mb": "150",
+            "min_free_disk_space_mb": "2048",
+            "rclone_transfers": "2",
+            "rclone_checkers": "3",
+            "printerval_curl_timeout_seconds": "40",
+            "printerval_playwright_timeout_seconds": "180",
+            "printerval_playwright_enabled": "1",
+        }
+    )
+
+    context = app_main.download_settings_context()
+    assert context["values"]["drive_download_timeout_seconds"] == 600
+    assert context["sources"]["drive_download_timeout_seconds"] == "local_settings"
+    assert app_main.settings_notice({"saved": "1"}).startswith("设置已保存")
+    assert app_main.settings_notice({"reset": "1"}).startswith("设置已恢复")
