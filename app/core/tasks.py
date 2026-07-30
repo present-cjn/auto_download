@@ -10,6 +10,7 @@ from typing import Optional
 
 from app.core import database as db
 from app.core.local_settings import env_or_setting
+from app.core.paths import app_data_dir
 from app.core.downloader import (
     cached_drive_folder,
     classify_download_failure,
@@ -24,7 +25,7 @@ from app.core.excel_parser import (
 )
 
 
-DATA_DIR = Path("data")
+DATA_DIR = app_data_dir()
 UPLOADS_DIR = DATA_DIR / "uploads"
 ORDERS_DIR = DATA_DIR / "orders"
 ARCHIVES_DIR = DATA_DIR / "archives"

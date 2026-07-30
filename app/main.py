@@ -46,6 +46,7 @@ from app.core.downloader import (
 )
 from app.core.excel_parser import build_import_summary
 from app.core.local_settings import env_or_setting, load_local_settings, save_local_settings
+from app.core.paths import app_data_dir
 from app.core.security import (
     hash_password,
     new_session_token,
@@ -91,7 +92,7 @@ templates = Jinja2Templates(directory=str(resource_path("templates")))
 app.mount("/static", StaticFiles(directory=str(resource_path("static"))), name="static")
 
 SESSION_COOKIE = "app_session"
-RESOURCES_DIR = Path("data/resources")
+RESOURCES_DIR = app_data_dir() / "resources"
 VALID_ROLES = {"developer", "admin", "operator"}
 ROLE_LABELS = {
     "developer": "开发者",

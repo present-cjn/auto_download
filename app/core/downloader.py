@@ -22,6 +22,7 @@ import os
 import requests
 
 from app.core.local_settings import env_or_setting, load_local_settings
+from app.core.paths import app_data_dir, app_runtime_root
 
 
 IMAGE_EXTENSIONS = {
@@ -720,12 +721,6 @@ def detect_cloudflare_challenge(html: str) -> bool:
 def drive_download_backend() -> str:
     backend = os.getenv("DRIVE_DOWNLOAD_BACKEND", "rclone").strip().lower()
     return backend if backend in {"rclone", "gdown"} else "rclone"
-
-
-def app_runtime_root() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parents[2]
 
 
 def app_resource_roots() -> list[Path]:
@@ -1692,7 +1687,7 @@ def download_printerval_with_playwright(url: str, output_dir: Path, expected_cou
                     "Printerval Cloudflare challenge required; "
                     f"stage={stage}; diagnostics={diagnostics_dir}; "
                     "run `.venv/bin/python -m app.tools.printerval_session "
-                    f"--url {url!r} --profile {printerval_playwright_user_data_dir() or 'data/browser-profiles/printerval-main'}` "
+                    f"--url {url!r} --profile {printerval_playwright_user_data_dir() or str(app_data_dir() / 'browser-profiles' / 'printerval-main')}` "
                     "on the server, complete verification, then retry."
                 )
             image_urls = parse_printerval_design_image_urls(url)

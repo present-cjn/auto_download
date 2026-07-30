@@ -6,9 +6,10 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from app.core.downloader import detect_cloudflare_challenge, import_playwright_sync_api
+from app.core.paths import app_data_dir
 
 
-DEFAULT_PROFILE_DIR = Path("data/browser-profiles/printerval-main")
+DEFAULT_PROFILE_DIR = app_data_dir() / "browser-profiles" / "printerval-main"
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:

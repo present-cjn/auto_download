@@ -9,8 +9,10 @@ from pathlib import Path
 from statistics import median
 from typing import Any, Optional
 
+from app.core.paths import app_data_dir
 
-DEFAULT_DB_PATH = Path("data/app.db")
+
+DEFAULT_DB_PATH = app_data_dir() / "app.db"
 DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 

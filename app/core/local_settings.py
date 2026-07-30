@@ -4,8 +4,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.core.paths import app_data_dir
 
-LOCAL_SETTINGS_PATH = Path("data/local_settings.json")
+
+LOCAL_SETTINGS_PATH = app_data_dir() / "local_settings.json"
 
 
 def load_local_settings() -> dict[str, Any]:

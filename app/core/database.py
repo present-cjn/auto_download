@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 from app.core.excel_parser import OrderItemRow
+from app.core.paths import app_data_dir
 
 
-DB_PATH = Path("data/app.db")
+DB_PATH = app_data_dir() / "app.db"
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 
 LEGACY_BATCH_STATUS_MAP = {
