@@ -10,6 +10,7 @@ import sys
 import time
 import zipfile
 
+import pytest
 import requests
 
 from app.core.downloader import (
@@ -45,6 +46,36 @@ from app.core.downloader import (
     safe_filename,
     write_cache_manifest,
 )
+
+
+DOWNLOADER_CONFIG_ENV_VARS = [
+    "DRIVE_DOWNLOAD_TIMEOUT_SECONDS",
+    "DRIVE_DOWNLOAD_BACKEND",
+    "DRIVE_ITEM_RETRY_BACKOFF_SECONDS",
+    "DRIVE_DOWNLOAD_DELAY_SECONDS",
+    "MAX_IMAGE_FILE_SIZE_MB",
+    "MIN_FREE_DISK_SPACE_MB",
+    "PRINTERVAL_CURL_TIMEOUT_SECONDS",
+    "PRINTERVAL_DIRECT_IMAGE_ENABLED",
+    "PRINTERVAL_PLAYWRIGHT_ENABLED",
+    "PRINTERVAL_PLAYWRIGHT_HEADLESS",
+    "PRINTERVAL_PLAYWRIGHT_STORAGE_STATE",
+    "PRINTERVAL_PLAYWRIGHT_TIMEOUT_SECONDS",
+    "PRINTERVAL_PLAYWRIGHT_USER_DATA_DIR",
+    "RCLONE_BIN",
+    "RCLONE_CHECKERS",
+    "RCLONE_DRIVE_REMOTES",
+    "RCLONE_TRANSFERS",
+]
+
+
+@pytest.fixture(autouse=True)
+def isolate_downloader_config(tmp_path: Path, monkeypatch) -> None:
+    from app.core import local_settings
+
+    monkeypatch.setattr(local_settings, "LOCAL_SETTINGS_PATH", tmp_path / "local_settings.json")
+    for env_name in DOWNLOADER_CONFIG_ENV_VARS:
+        monkeypatch.delenv(env_name, raising=False)
 
 
 class FakeResponse:
