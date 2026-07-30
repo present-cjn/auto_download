@@ -34,6 +34,7 @@ IMAGE_EXTENSIONS = {
     ".bmp",
     ".tif",
     ".tiff",
+    ".psd",
 }
 DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 180
 DEFAULT_RCLONE_TRANSFERS = "1"
