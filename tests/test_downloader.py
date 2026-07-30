@@ -610,7 +610,7 @@ def test_open_id_folder_resolves_with_rclone_folder_probe(tmp_path: Path, monkey
 
     def fake_run(command, check, capture_output, text, timeout=None, env=None, **kwargs):
         commands.append(command)
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="design.jpg\n", stderr="")
 
     def fake_download_folder(folder_id: str, output_dir: Path) -> None:
         assert folder_id == "folder123"
@@ -665,6 +665,33 @@ def test_open_id_file_resolves_with_rclone_folder_probe(tmp_path: Path, monkeypa
         "app.core.downloader.run_download_with_timeout",
         lambda download_func, resource_id, output_dir, timeout_seconds=None: download_func(resource_id, output_dir),
     )
+    cache_dir = cached_drive_folder("https://drive.google.com/open?id=file123", tmp_path)
+
+    assert cache_dir == tmp_path / "file-file123"
+    assert (cache_dir / "mockup.jpg").exists()
+
+
+def test_open_id_empty_folder_probe_falls_back_to_file_download(tmp_path: Path, monkeypatch) -> None:
+    def fake_run(command, check, capture_output, text, timeout=None, env=None, **kwargs):
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    def fake_download_file(file_id: str, output_dir: Path) -> None:
+        assert file_id == "file123"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "mockup.jpg").write_bytes(b"jpg")
+
+    def fake_download_folder(folder_id: str, output_dir: Path) -> None:
+        raise AssertionError("open?id= file should not be downloaded as a folder")
+
+    monkeypatch.setattr("app.core.downloader.subprocess.run", fake_run)
+    monkeypatch.setenv("RCLONE_BIN", "rclone")
+    monkeypatch.setattr("app.core.downloader.download_drive_file_by_id", fake_download_file)
+    monkeypatch.setattr("app.core.downloader.download_drive_folder_by_id", fake_download_folder)
+    monkeypatch.setattr(
+        "app.core.downloader.run_download_with_timeout",
+        lambda download_func, resource_id, output_dir, timeout_seconds=None: download_func(resource_id, output_dir),
+    )
+
     cache_dir = cached_drive_folder("https://drive.google.com/open?id=file123", tmp_path)
 
     assert cache_dir == tmp_path / "file-file123"

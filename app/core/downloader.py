@@ -2214,8 +2214,8 @@ def is_rclone_folder_probe_file_error(exc: Exception) -> bool:
     )
 
 
-def rclone_probe_drive_folder_id(remote: str, resource_id: str) -> None:
-    run_rclone_command(
+def rclone_probe_drive_folder_id(remote: str, resource_id: str) -> subprocess.CompletedProcess[str]:
+    return run_rclone_command(
         [
             rclone_bin(),
             "lsf",
@@ -2264,7 +2264,9 @@ def resolve_rclone_drive_resource(resource_id: str) -> DriveResource:
     remotes = rclone_drive_remotes()
     for index, remote in enumerate(remotes, start=1):
         try:
-            rclone_probe_drive_folder_id(remote, resource_id)
+            completed = rclone_probe_drive_folder_id(remote, resource_id)
+            if not (completed.stdout or "").strip():
+                return DriveResource("file", resource_id)
             return DriveResource("folder", resource_id)
         except Exception as exc:  # noqa: BLE001 - aggregate remote pool failures.
             errors.append(f"remote={remote} error={exc.__class__.__name__}: {exc}")
